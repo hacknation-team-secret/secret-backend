@@ -1,3 +1,4 @@
+import os
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
@@ -7,15 +8,18 @@ from fastapi.security import OAuth2PasswordBearer, APIKeyHeader
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from sqlalchemy.orm import Session
+from dotenv import load_dotenv
 
 import models
 import schemas
 from database import get_db
 
-# Configuration - In a real app, these should be in environment variables
+load_dotenv()
+
+# Configuration
 SECRET_KEY = "super-secret-key-for-knowhere-api"
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
@@ -74,6 +78,16 @@ async def get_user_by_api_key(
 async def get_current_active_user(
     current_user: Annotated[models.User, Depends(get_current_user)]
 ):
+    return current_user
+
+async def get_admin_user(
+    current_user: Annotated[models.User, Depends(get_current_active_user)]
+):
+    if not current_user.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="The user does not have enough privileges"
+        )
     return current_user
 
 async def get_current_user_flexible(
