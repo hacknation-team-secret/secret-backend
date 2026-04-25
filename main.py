@@ -2,6 +2,7 @@ from datetime import timedelta
 from typing import Annotated, Any, cast
 
 from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordRequestForm
 from geoalchemy2.elements import WKBElement
 from geoalchemy2.shape import from_shape, to_shape
@@ -25,6 +26,14 @@ app = FastAPI(
     version="1.1.0",
     docs_url=None,
     redoc_url=None,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
