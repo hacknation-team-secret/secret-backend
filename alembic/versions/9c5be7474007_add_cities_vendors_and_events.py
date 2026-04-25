@@ -33,10 +33,6 @@ def upgrade() -> None:
     ), nullable=True),
     sa.PrimaryKeyConstraint('id')
     )
-    op.create_index(
-        'idx_cities_boundary', 'cities', ['boundary'],
-        unique=False, postgresql_using='gist'
-    )
     op.create_index(op.f('ix_cities_id'), 'cities', ['id'], unique=False)
     op.create_index(op.f('ix_cities_name'), 'cities', ['name'], unique=False)
     op.create_table('events',
@@ -52,10 +48,6 @@ def upgrade() -> None:
     sa.Column('owner_type', sa.String(), nullable=True),
     sa.Column('owner_id', sa.Integer(), nullable=True),
     sa.PrimaryKeyConstraint('id')
-    )
-    op.create_index(
-        'idx_events_location', 'events', ['location'],
-        unique=False, postgresql_using='gist'
     )
     op.create_index(op.f('ix_events_id'), 'events', ['id'], unique=False)
     op.create_index(op.f('ix_events_title'), 'events', ['title'], unique=False)

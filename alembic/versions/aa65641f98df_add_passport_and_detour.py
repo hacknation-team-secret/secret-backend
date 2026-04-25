@@ -63,6 +63,9 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint('detour_id', 'user_id')
     )
 
+    # Add research_count to users
+    op.add_column('users', sa.Column('research_count', sa.Integer(), nullable=True, server_default='0'))
+
 
 def downgrade() -> None:
     op.drop_table('detour_shares')
