@@ -64,7 +64,10 @@ def upgrade() -> None:
     )
 
     # Add research_count to users
-    op.add_column('users', sa.Column('research_count', sa.Integer(), nullable=True, server_default='0'))
+    op.add_column(
+        "users",
+        sa.Column("research_count", sa.Integer(), nullable=True, server_default="0"),
+    )
 
 
 def downgrade() -> None:

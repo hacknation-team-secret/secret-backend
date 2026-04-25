@@ -35,15 +35,18 @@ def get_research_agent():
 
     return agent
 
-async def run_research(query: str):
+async def run_research(query: str, history: list[dict] | None = None):
     """
     Runs a research query through the agent and returns the response.
     """
     agent = get_research_agent()
 
+    messages = history or []
+    messages.append({"role": "user", "content": query})
+
     # Invoke the agent using the format from documentation
     response = await agent.ainvoke({
-        "messages": [{"role": "user", "content": query}]
+        "messages": messages
     })
 
     # Extract the response content

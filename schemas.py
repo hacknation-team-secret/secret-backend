@@ -126,8 +126,38 @@ class Passport(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class ResearchMessageBase(BaseModel):
+    role: str
+    content: str
+
+class ResearchMessage(ResearchMessageBase):
+    id: int
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+class ResearchThreadBase(BaseModel):
+    title: str | None = None
+
+class ResearchThreadCreate(ResearchThreadBase):
+    pass
+
+class ResearchThread(ResearchThreadBase):
+    id: int
+    created_at: datetime
+    messages: list[ResearchMessage]
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class ResearchRequest(BaseModel):
     query: str
+    thread_id: int | None = None
 
 class ResearchResponse(BaseModel):
     answer: str
+    thread_id: int
+
+class ResearchCaptureRequest(BaseModel):
+    thread_id: int
+    image_url: str | None = None

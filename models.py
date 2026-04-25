@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 from geoalchemy2 import Geometry
 from sqlalchemy import (
     Boolean,
@@ -70,6 +72,35 @@ class User(Base):
     shared_detours = relationship(
         "Detour", secondary="detour_shares", back_populates="shared_with"
     )
+    research_threads = relationship("ResearchThread", back_populates="user")
+
+
+class ResearchThread(Base):
+    __tablename__ = "research_threads"
+
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String, nullable=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    created_at = Column(DateTime, default=lambda: datetime.now(UTC))
+
+    user = relationship("User", back_populates="research_threads")
+    messages = relationship(
+        "ResearchMessage",
+        back_populates="thread",
+        cascade="all, delete-orphan"
+    )
+
+
+class ResearchMessage(Base):
+    __tablename__ = "research_messages"
+
+    id = Column(Integer, primary_key=True, index=True)
+    thread_id = Column(Integer, ForeignKey("research_threads.id"))
+    role = Column(String)  # 'user' or 'assistant'
+    content = Column(Text)
+    created_at = Column(DateTime, default=lambda: datetime.now(UTC))
+
+    thread = relationship("ResearchThread", back_populates="messages")
 
 
 class City(Base):

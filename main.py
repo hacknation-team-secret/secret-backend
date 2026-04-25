@@ -1,7 +1,9 @@
+import os
+import uuid
 from datetime import timedelta
 from typing import Annotated, Any, cast
 
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordRequestForm
 from geoalchemy2.elements import WKBElement
@@ -15,6 +17,7 @@ import models
 import schemas
 from agent import run_research
 from database import get_db
+from storage import tigris_client
 
 # Hardcoded Supabase credentials
 SUPABASE_URL = "https://qokprjircewixfxchqje.supabase.co"
@@ -551,7 +554,33 @@ async def create_item(
     return db_item
 
 
-# --- AI Research ---
+# --- AI Research & Storage ---
+
+
+@app.post("/research/threads", response_model=schemas.ResearchThread)
+async def create_research_thread(
+    thread_in: schemas.ResearchThreadCreate,
+    current_user: Annotated[models.User, Depends(auth.get_current_active_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    db_thread = models.ResearchThread(
+        title=thread_in.title or "New Research",
+        user_id=current_user.id
+    )
+    db.add(db_thread)
+    db.commit()
+    db.refresh(db_thread)
+    return db_thread
+
+
+@app.get("/research/threads", response_model=list[schemas.ResearchThread])
+async def list_research_threads(
+    current_user: Annotated[models.User, Depends(auth.get_current_active_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    return db.query(models.ResearchThread).filter(
+        models.ResearchThread.user_id == current_user.id
+    ).all()
 
 
 @app.post("/research", response_model=schemas.ResearchResponse)
@@ -561,17 +590,136 @@ async def research(
     db: Annotated[Session, Depends(get_db)],
 ):
     """
-    Perform a web research query using the LangChain agent with Tavily.
+    Perform a web research query. Supports threading for conversation history.
     """
     try:
+        thread_id = request.thread_id
+        history = []
+
+        if thread_id:
+            db_thread = db.query(models.ResearchThread).filter(
+                models.ResearchThread.id == thread_id,
+                models.ResearchThread.user_id == current_user.id
+            ).first()
+            if not db_thread:
+                raise HTTPException(status_code=404, detail="Thread not found")
+
+            # Load last 10 messages for context
+            db_messages = db.query(models.ResearchMessage).filter(
+                models.ResearchMessage.thread_id == thread_id
+            ).order_by(models.ResearchMessage.created_at.asc()).limit(10).all()
+
+            history = [{"role": m.role, "content": m.content} for m in db_messages]
+        else:
+            # Create a new thread if none provided
+            db_thread = models.ResearchThread(
+                title=request.query[:50] + "...",
+                user_id=current_user.id
+            )
+            db.add(db_thread)
+            db.commit()
+            db.refresh(db_thread)
+            thread_id = db_thread.id
+
+        # Run research with history
+        answer = await run_research(request.query, history)
+
+        # Save messages
+        user_msg = models.ResearchMessage(
+            thread_id=thread_id, role="user", content=request.query
+        )
+        asst_msg = models.ResearchMessage(
+            thread_id=thread_id, role="assistant", content=answer
+        )
+        db.add(user_msg)
+        db.add(asst_msg)
+
         # Increment usage count
         current_user.research_count += 1
         db.commit()
 
-        answer = await run_research(request.query)
-        return {"answer": answer}
+        return {"answer": answer, "thread_id": thread_id}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@app.post("/research/capture")
+async def capture_research_to_passport(
+    request: schemas.ResearchCaptureRequest,
+    current_user: Annotated[models.User, Depends(auth.get_current_active_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """
+    Captures a research thread and updates the user's passport
+    (description) with Markdown.
+    """
+    db_thread = db.query(models.ResearchThread).filter(
+        models.ResearchThread.id == request.thread_id,
+        models.ResearchThread.user_id == current_user.id
+    ).first()
+
+    if not db_thread:
+        raise HTTPException(status_code=404, detail="Thread not found")
+
+    # Generate Markdown summary
+    markdown = f"\n\n### Research: {db_thread.title}\n"
+    if request.image_url:
+        markdown += f"![Research Image]({request.image_url})\n\n"
+
+    for msg in db_thread.messages:
+        role = "User" if msg.role == "user" else "Assistant"
+        markdown += f"**{role}**: {msg.content}\n\n"
+
+    # Append to description (passport)
+    if current_user.description:
+        new_desc = str(current_user.description) + markdown
+        cast(Any, current_user).description = new_desc
+    else:
+        cast(Any, current_user).description = markdown
+
+    db.commit()
+    return {"message": "Thread captured to passport successfully"}
+
+
+@app.post("/storage/upload")
+async def upload_image(
+    current_user: Annotated[models.User, Depends(auth.get_current_active_user)],
+    file: Annotated[UploadFile, File(...)],
+):
+    """
+    Upload an image to Tigris and return the public URL.
+    """
+    if not tigris_client:
+        raise HTTPException(status_code=500, detail="Tigris client not configured")
+
+    bucket_name = os.getenv("TIGRIS_STORAGE_BUCKET")
+    if not bucket_name:
+        raise HTTPException(status_code=500, detail="TIGRIS_STORAGE_BUCKET not set")
+
+    file_extension = file.filename.split(".")[-1] if file.filename else "jpg"
+    object_name = f"uploads/{current_user.id}/{uuid.uuid4()}.{file_extension}"
+
+    try:
+        content = await file.read()
+        tigris_client.put_object(
+            Bucket=bucket_name,
+            Key=object_name,
+            Body=content,
+            ContentType=file.content_type
+        )
+
+        # Generate a public URL.
+        # Tigris usually provides a public endpoint or you can construct it.
+        # Assuming standard S3 endpoint structure or Tigris specific.
+        endpoint = os.getenv("TIGRIS_STORAGE_ENDPOINT")
+        # For Tigris, it's often https://<bucket>.fly.storage.tigris.dev/<key>
+        # or similar depending on the region/setup.
+        url = f"{endpoint}/{bucket_name}/{object_name}"
+        return {"url": url, "object_name": object_name}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}") from e
 
 
 @app.get("/")
@@ -582,6 +730,22 @@ async def root():
 @app.get("/health")
 async def health_check():
     return {"status": "healthy"}
+
+
+@app.get("/storage/test")
+async def test_storage():
+    """
+    Test the Tigris storage connection by listing buckets.
+    """
+    if not tigris_client:
+        raise HTTPException(
+            status_code=500, detail="Tigris client not configured. Check env variables."
+        )
+    try:
+        response = tigris_client.list_buckets()
+        return {"buckets": [bucket["Name"] for bucket in response.get("Buckets", [])]}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Tigris error: {str(e)}") from e
 
 
 if __name__ == "__main__":
