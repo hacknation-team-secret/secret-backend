@@ -1,7 +1,8 @@
 
 from datetime import datetime
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ItemBase(BaseModel):
@@ -154,10 +155,44 @@ class ResearchRequest(BaseModel):
     query: str
     thread_id: int | None = None
 
+
 class ResearchResponse(BaseModel):
     answer: str
     thread_id: int
 
+
 class ResearchCaptureRequest(BaseModel):
     thread_id: int
     image_url: str | None = None
+
+
+class ResearchExtractRequest(BaseModel):
+    url: str
+    query: str | None = None
+    extract_depth: Literal["basic", "advanced"] = "advanced"
+    include_images: bool = True
+
+
+class InstagramProfileData(BaseModel):
+    username: str | None = None
+    display_name: str | None = None
+    bio: str | None = None
+    post_count: int | None = None
+    follower_count: int | None = None
+    following_count: int | None = None
+    external_url: str | None = None
+    profile_image_url: str | None = None
+
+
+class ResearchExtractResponse(BaseModel):
+    url: str
+    platform: str
+    extract_depth: Literal["basic", "advanced"]
+    raw_content: str | None = None
+    images: list[str] = Field(default_factory=list)
+    favicon: str | None = None
+    profile: InstagramProfileData | None = None
+    failed: bool = False
+    error: str | None = None
+    tavily_request_id: str | None = None
+    tavily_response_time: float | None = None

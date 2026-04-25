@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 import auth
 import models
 import schemas
-from agent import run_research
+from agent import run_extract_research, run_research
 from database import get_db
 from storage import tigris_client
 
@@ -645,6 +645,30 @@ async def research(
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
+@app.post("/research/extract", response_model=schemas.ResearchExtractResponse)
+async def research_extract(
+    request: schemas.ResearchExtractRequest,
+    current_user: Annotated[models.User, Depends(auth.get_current_active_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """
+    Extract structured content from a known URL using Tavily Extract.
+    """
+    try:
+        current_user.research_count += 1
+        db.commit()
+
+        extraction = await run_extract_research(
+            url=request.url,
+            query=request.query,
+            extract_depth=request.extract_depth,
+            include_images=request.include_images,
+        )
+        return extraction
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
 @app.post("/research/capture")
 async def capture_research_to_passport(
     request: schemas.ResearchCaptureRequest,
@@ -663,7 +687,6 @@ async def capture_research_to_passport(
     if not db_thread:
         raise HTTPException(status_code=404, detail="Thread not found")
 
-    # Generate Markdown summary
     markdown = f"\n\n### Research: {db_thread.title}\n"
     if request.image_url:
         markdown += f"![Research Image]({request.image_url})\n\n"
@@ -672,7 +695,6 @@ async def capture_research_to_passport(
         role = "User" if msg.role == "user" else "Assistant"
         markdown += f"**{role}**: {msg.content}\n\n"
 
-    # Append to description (passport)
     if current_user.description:
         new_desc = str(current_user.description) + markdown
         cast(Any, current_user).description = new_desc
@@ -710,12 +732,7 @@ async def upload_image(
             ContentType=file.content_type
         )
 
-        # Generate a public URL.
-        # Tigris usually provides a public endpoint or you can construct it.
-        # Assuming standard S3 endpoint structure or Tigris specific.
         endpoint = os.getenv("TIGRIS_STORAGE_ENDPOINT")
-        # For Tigris, it's often https://<bucket>.fly.storage.tigris.dev/<key>
-        # or similar depending on the region/setup.
         url = f"{endpoint}/{bucket_name}/{object_name}"
         return {"url": url, "object_name": object_name}
     except Exception as e:
