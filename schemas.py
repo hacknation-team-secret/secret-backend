@@ -64,6 +64,44 @@ class GroupInvite(BaseModel):
     username: str
 
 
+class GroupFavoriteCreate(BaseModel):
+    title: str
+    description: str | None = None
+    category: str | None = None
+    estimated_cost: float | None = None
+
+
+class GroupFavorite(BaseModel):
+    id: int
+    group_id: int
+    title: str
+    description: str | None = None
+    category: str | None = None
+    estimated_cost: float | None = None
+    created_by: UserPublic
+    created_at: datetime
+    vote_count: int
+    voted_by_me: bool
+
+
+class GroupBudgetUpsert(BaseModel):
+    total_budget: float
+    currency: str = "USD"
+    notes: str | None = None
+
+
+class GroupBudget(BaseModel):
+    group_id: int
+    user: UserPublic
+    total_budget: float
+    currency: str
+    notes: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class GroupMembership(BaseModel):
     user: UserPublic
     status: str

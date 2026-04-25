@@ -5,6 +5,7 @@ from sqlalchemy import (
     Boolean,
     Column,
     DateTime,
+    Float,
     ForeignKey,
     Integer,
     String,
@@ -96,6 +97,16 @@ class Group(Base):
         back_populates="group",
         cascade="all, delete-orphan",
     )
+    favorites = relationship(
+        "GroupFavorite",
+        back_populates="group",
+        cascade="all, delete-orphan",
+    )
+    budgets = relationship(
+        "GroupBudget",
+        back_populates="group",
+        cascade="all, delete-orphan",
+    )
 
 
 class GroupMembership(Base):
@@ -114,6 +125,53 @@ class GroupMembership(Base):
         foreign_keys=[user_id],
     )
     invited_by = relationship("User", foreign_keys=[invited_by_id])
+
+
+class GroupFavorite(Base):
+    __tablename__ = "group_favorites"
+
+    id = Column(Integer, primary_key=True, index=True)
+    group_id = Column(Integer, ForeignKey("groups.id"))
+    created_by_id = Column(Integer, ForeignKey("users.id"))
+    title = Column(String, index=True)
+    description = Column(Text, nullable=True)
+    category = Column(String, nullable=True)
+    estimated_cost = Column(Float, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(UTC))
+
+    group = relationship("Group", back_populates="favorites")
+    created_by = relationship("User")
+    votes = relationship(
+        "GroupFavoriteVote",
+        back_populates="favorite",
+        cascade="all, delete-orphan",
+    )
+
+
+class GroupFavoriteVote(Base):
+    __tablename__ = "group_favorite_votes"
+
+    favorite_id = Column(Integer, ForeignKey("group_favorites.id"), primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), primary_key=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(UTC))
+
+    favorite = relationship("GroupFavorite", back_populates="votes")
+    user = relationship("User")
+
+
+class GroupBudget(Base):
+    __tablename__ = "group_budgets"
+
+    group_id = Column(Integer, ForeignKey("groups.id"), primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), primary_key=True)
+    total_budget = Column(Float)
+    currency = Column(String, default="USD")
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(UTC))
+    updated_at = Column(DateTime, default=lambda: datetime.now(UTC))
+
+    group = relationship("Group", back_populates="budgets")
+    user = relationship("User")
 
 
 class ResearchThread(Base):

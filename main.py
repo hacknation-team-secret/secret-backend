@@ -1,6 +1,6 @@
 import os
 import uuid
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, cast
 
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, status
@@ -142,12 +142,64 @@ def _build_group_research_context(
             ]
             lines.append("Saved detours: " + " | ".join(detour_summaries))
 
+    favorites = (
+        db.query(models.GroupFavorite)
+        .filter(models.GroupFavorite.group_id == group.id)
+        .all()
+    )
+    if favorites:
+        lines.append("\nGroup favorites and votes:")
+        for favorite in favorites:
+            cost = (
+                f", estimated ${favorite.estimated_cost:.0f} per person"
+                if favorite.estimated_cost is not None
+                else ""
+            )
+            lines.append(
+                f"- {favorite.title} ({len(favorite.votes)} votes{cost}): "
+                f"{favorite.description or 'No description'}"
+            )
+
+    budgets = (
+        db.query(models.GroupBudget)
+        .filter(models.GroupBudget.group_id == group.id)
+        .all()
+    )
+    if budgets:
+        per_person = [budget.total_budget for budget in budgets if budget.total_budget]
+        average_budget = sum(per_person) / len(per_person) if per_person else 0
+        lines.append("\nBudget simulation:")
+        lines.append(f"Average target per person: ${average_budget:.0f}")
+        for budget in budgets:
+            lines.append(
+                f"- @{budget.user.username}: {budget.currency} "
+                f"{budget.total_budget:.0f}; {budget.notes or 'No notes'}"
+            )
+
     lines.append(
         "\nUse every member's profile, attended events, and saved detours. "
         "Recommend a concrete group itinerary that balances the group's "
         "shared and competing preferences."
     )
     return "\n".join(lines)
+
+
+def _favorite_to_dict(
+    favorite: models.GroupFavorite,
+    current_user: models.User,
+) -> dict[str, Any]:
+    return {
+        "id": favorite.id,
+        "group_id": favorite.group_id,
+        "title": favorite.title,
+        "description": favorite.description,
+        "category": favorite.category,
+        "estimated_cost": favorite.estimated_cost,
+        "created_by": favorite.created_by,
+        "created_at": favorite.created_at,
+        "vote_count": len(favorite.votes),
+        "voted_by_me": any(vote.user_id == current_user.id for vote in favorite.votes),
+    }
 
 
 @app.get("/docs", include_in_schema=False)
@@ -371,6 +423,138 @@ async def accept_group_invite(
     if not group:
         raise HTTPException(status_code=404, detail="Group not found")
     return group
+
+
+@app.get("/groups/{group_id}/favorites", response_model=list[schemas.GroupFavorite])
+async def list_group_favorites(
+    group_id: int,
+    current_user: Annotated[models.User, Depends(auth.get_current_active_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    _get_group_for_member(db, group_id, current_user)
+    favorites = (
+        db.query(models.GroupFavorite)
+        .filter(models.GroupFavorite.group_id == group_id)
+        .order_by(models.GroupFavorite.created_at.desc())
+        .all()
+    )
+    return [_favorite_to_dict(favorite, current_user) for favorite in favorites]
+
+
+@app.post("/groups/{group_id}/favorites", response_model=schemas.GroupFavorite)
+async def create_group_favorite(
+    group_id: int,
+    favorite_in: schemas.GroupFavoriteCreate,
+    current_user: Annotated[models.User, Depends(auth.get_current_active_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    _get_group_for_member(db, group_id, current_user)
+    favorite = models.GroupFavorite(
+        group_id=group_id,
+        created_by_id=current_user.id,
+        title=favorite_in.title,
+        description=favorite_in.description,
+        category=favorite_in.category,
+        estimated_cost=favorite_in.estimated_cost,
+    )
+    db.add(favorite)
+    db.flush()
+    db.add(models.GroupFavoriteVote(favorite_id=favorite.id, user_id=current_user.id))
+    db.commit()
+    db.refresh(favorite)
+    return _favorite_to_dict(favorite, current_user)
+
+
+@app.post("/groups/{group_id}/favorites/{favorite_id}/vote")
+async def toggle_group_favorite_vote(
+    group_id: int,
+    favorite_id: int,
+    current_user: Annotated[models.User, Depends(auth.get_current_active_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    _get_group_for_member(db, group_id, current_user)
+    favorite = (
+        db.query(models.GroupFavorite)
+        .filter(
+            models.GroupFavorite.id == favorite_id,
+            models.GroupFavorite.group_id == group_id,
+        )
+        .first()
+    )
+    if not favorite:
+        raise HTTPException(status_code=404, detail="Favorite not found")
+
+    vote = (
+        db.query(models.GroupFavoriteVote)
+        .filter(
+            models.GroupFavoriteVote.favorite_id == favorite_id,
+            models.GroupFavoriteVote.user_id == current_user.id,
+        )
+        .first()
+    )
+    if vote:
+        db.delete(vote)
+        voted = False
+    else:
+        db.add(
+            models.GroupFavoriteVote(
+                favorite_id=favorite_id,
+                user_id=current_user.id,
+            )
+        )
+        voted = True
+    db.commit()
+    return {"voted": voted}
+
+
+@app.get("/groups/{group_id}/budgets", response_model=list[schemas.GroupBudget])
+async def list_group_budgets(
+    group_id: int,
+    current_user: Annotated[models.User, Depends(auth.get_current_active_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    _get_group_for_member(db, group_id, current_user)
+    return (
+        db.query(models.GroupBudget)
+        .filter(models.GroupBudget.group_id == group_id)
+        .order_by(models.GroupBudget.total_budget.asc())
+        .all()
+    )
+
+
+@app.put("/groups/{group_id}/budget", response_model=schemas.GroupBudget)
+async def upsert_group_budget(
+    group_id: int,
+    budget_in: schemas.GroupBudgetUpsert,
+    current_user: Annotated[models.User, Depends(auth.get_current_active_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    _get_group_for_member(db, group_id, current_user)
+    budget = (
+        db.query(models.GroupBudget)
+        .filter(
+            models.GroupBudget.group_id == group_id,
+            models.GroupBudget.user_id == current_user.id,
+        )
+        .first()
+    )
+    if budget:
+        budget.total_budget = cast(Any, budget_in.total_budget)
+        budget.currency = cast(Any, budget_in.currency)
+        budget.notes = cast(Any, budget_in.notes)
+        budget.updated_at = cast(Any, datetime.now(UTC))
+    else:
+        budget = models.GroupBudget(
+            group_id=group_id,
+            user_id=current_user.id,
+            total_budget=budget_in.total_budget,
+            currency=budget_in.currency,
+            notes=budget_in.notes,
+        )
+        db.add(budget)
+    db.commit()
+    db.refresh(budget)
+    return budget
 
 
 # --- Cities Management ---

@@ -473,6 +473,118 @@ def bootstrap():
                     )
                 )
 
+        db.flush()
+
+        favorites_data = [
+            {
+                "title": "Ferry Building breakfast crawl",
+                "description": (
+                    "Low-friction morning with coffee, bakeries, and bay views."
+                ),
+                "category": "food",
+                "estimated_cost": 38.0,
+                "created_by": "maya",
+                "votes": ["maya", "nina", "omar"],
+            },
+            {
+                "title": "Lower East Side music night",
+                "description": (
+                    "Small venues and late street food for the high-energy block."
+                ),
+                "category": "music",
+                "estimated_cost": 72.0,
+                "created_by": "leo",
+                "votes": ["leo", "maya"],
+            },
+            {
+                "title": "Accessible gallery loop",
+                "description": "Architecture, galleries, and an easy sunset route.",
+                "category": "culture",
+                "estimated_cost": 25.0,
+                "created_by": "nina",
+                "votes": ["nina", "maya", "leo"],
+            },
+        ]
+        for favorite_data in favorites_data:
+            favorite = (
+                db.query(models.GroupFavorite)
+                .filter(
+                    models.GroupFavorite.group_id == group.id,
+                    models.GroupFavorite.title == favorite_data["title"],
+                )
+                .first()
+            )
+            if not favorite:
+                favorite = models.GroupFavorite(
+                    group_id=group.id,
+                    created_by_id=users_by_name[
+                        cast(str, favorite_data["created_by"])
+                    ].id,
+                    title=favorite_data["title"],
+                    description=favorite_data["description"],
+                    category=favorite_data["category"],
+                    estimated_cost=favorite_data["estimated_cost"],
+                )
+                db.add(favorite)
+                db.flush()
+
+            for voter in cast(list[str], favorite_data["votes"]):
+                user = users_by_name[voter]
+                vote = (
+                    db.query(models.GroupFavoriteVote)
+                    .filter(
+                        models.GroupFavoriteVote.favorite_id == favorite.id,
+                        models.GroupFavoriteVote.user_id == user.id,
+                    )
+                    .first()
+                )
+                if not vote:
+                    db.add(
+                        models.GroupFavoriteVote(
+                            favorite_id=favorite.id,
+                            user_id=user.id,
+                        )
+                    )
+
+        budgets_data = [
+            {
+                "username": "maya",
+                "total_budget": 260.0,
+                "notes": "Prefer one splurge meal.",
+            },
+            {"username": "leo", "total_budget": 340.0, "notes": "Flexible for music."},
+            {
+                "username": "nina",
+                "total_budget": 300.0,
+                "notes": "Prioritize accessible transit.",
+            },
+            {
+                "username": "omar",
+                "total_budget": 180.0,
+                "notes": "Keep activities budget-conscious.",
+            },
+        ]
+        for budget_data in budgets_data:
+            user = users_by_name[cast(str, budget_data["username"])]
+            budget = (
+                db.query(models.GroupBudget)
+                .filter(
+                    models.GroupBudget.group_id == group.id,
+                    models.GroupBudget.user_id == user.id,
+                )
+                .first()
+            )
+            if not budget:
+                db.add(
+                    models.GroupBudget(
+                        group_id=group.id,
+                        user_id=user.id,
+                        total_budget=budget_data["total_budget"],
+                        currency="USD",
+                        notes=budget_data["notes"],
+                    )
+                )
+
         db.commit()
         print("Bootstrap complete!")
 
