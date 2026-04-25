@@ -690,6 +690,11 @@ async def add_vendor_admin(
 # --- Events Management ---
 
 
+@app.get("/events", response_model=list[schemas.Event])
+async def list_events(db: Annotated[Session, Depends(get_db)]):
+    return [event_to_dict(event) for event in db.query(models.Event).all()]
+
+
 @app.post("/events", response_model=schemas.Event)
 async def create_event(
     event: schemas.EventCreate,
