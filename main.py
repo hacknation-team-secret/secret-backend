@@ -72,6 +72,84 @@ def detour_to_dict(db_detour: models.Detour):
     }
 
 
+def _accepted_group_membership(
+    db: Session,
+    group_id: int,
+    user_id: int,
+) -> models.GroupMembership | None:
+    return (
+        db.query(models.GroupMembership)
+        .filter(
+            models.GroupMembership.group_id == group_id,
+            models.GroupMembership.user_id == user_id,
+            models.GroupMembership.status == "accepted",
+        )
+        .first()
+    )
+
+
+def _get_group_for_member(
+    db: Session,
+    group_id: int,
+    user: models.User,
+) -> models.Group:
+    group = db.query(models.Group).filter(models.Group.id == group_id).first()
+    if not group:
+        raise HTTPException(status_code=404, detail="Group not found")
+    if group.owner_id == user.id:
+        return group
+    if not _accepted_group_membership(db, group_id, cast(int, user.id)):
+        raise HTTPException(status_code=403, detail="Not a member of this group")
+    return group
+
+
+def _build_group_research_context(
+    db: Session,
+    group: models.Group,
+) -> str:
+    lines = [
+        "GROUP TRIP CONTEXT",
+        f"Group: {group.name}",
+    ]
+    if group.description:
+        lines.append(f"Planning notes: {group.description}")
+
+    accepted_members = [
+        membership.user
+        for membership in group.memberships
+        if membership.status == "accepted"
+    ]
+    for member in accepted_members:
+        lines.append(f"\nMember: @{member.username}")
+        if member.description:
+            lines.append(f"Passport/profile: {member.description}")
+
+        attended_titles = [event.title for event in member.attended_events]
+        if attended_titles:
+            lines.append("Attended events: " + ", ".join(attended_titles[:8]))
+
+        detours = (
+            db.query(models.Detour)
+            .filter(models.Detour.user_id == member.id)
+            .order_by(models.Detour.id.desc())
+            .limit(5)
+            .all()
+        )
+        if detours:
+            detour_summaries = [
+                f"{detour.name}: {detour.description or 'No description'}"
+                for detour in detours
+            ]
+            lines.append("Saved detours: " + " | ".join(detour_summaries))
+
+    lines.append(
+        "\nUse every member's profile, attended events, and saved detours. "
+        "Recommend a concrete group itinerary that balances the group's "
+        "shared and competing preferences."
+    )
+    return "\n".join(lines)
+
+
 @app.get("/docs", include_in_schema=False)
 async def scalar_html():
     from scalar_fastapi import get_scalar_api_reference
@@ -112,9 +190,7 @@ async def login_for_access_token(
     db: Annotated[Session, Depends(get_db)],
 ):
     user = (
-        db.query(models.User)
-        .filter(models.User.username == form_data.username)
-        .first()
+        db.query(models.User).filter(models.User.username == form_data.username).first()
     )
     if not user or not auth.verify_password(form_data.password, user.hashed_password):
         raise HTTPException(
@@ -134,6 +210,19 @@ async def read_users_me(
     current_user: Annotated[models.User, Depends(auth.get_current_active_user)],
 ):
     return current_user
+
+
+@app.get("/users", response_model=list[schemas.UserPublic])
+async def list_users(
+    current_user: Annotated[models.User, Depends(auth.get_current_active_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    return (
+        db.query(models.User)
+        .filter(models.User.id != current_user.id)
+        .order_by(models.User.username.asc())
+        .all()
+    )
 
 
 @app.put("/users/me/description")
@@ -172,6 +261,116 @@ async def regenerate_api_key(
     db.commit()
     db.refresh(current_user)
     return {"api_key": current_user.api_key}
+
+
+# --- Group Trip Planning ---
+
+
+@app.post("/groups", response_model=schemas.Group)
+async def create_group(
+    group_in: schemas.GroupCreate,
+    current_user: Annotated[models.User, Depends(auth.get_current_active_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    db_group = models.Group(
+        name=group_in.name,
+        description=group_in.description,
+        owner_id=current_user.id,
+    )
+    db.add(db_group)
+    db.flush()
+    db.add(
+        models.GroupMembership(
+            group_id=db_group.id,
+            user_id=current_user.id,
+            invited_by_id=current_user.id,
+            status="accepted",
+        )
+    )
+    db.commit()
+    db.refresh(db_group)
+    return db_group
+
+
+@app.get("/groups", response_model=list[schemas.Group])
+async def list_groups(
+    current_user: Annotated[models.User, Depends(auth.get_current_active_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    return (
+        db.query(models.Group)
+        .join(models.GroupMembership)
+        .filter(models.GroupMembership.user_id == current_user.id)
+        .order_by(models.Group.created_at.desc())
+        .all()
+    )
+
+
+@app.post("/groups/{group_id}/invite", response_model=schemas.Group)
+async def invite_group_member(
+    group_id: int,
+    invite: schemas.GroupInvite,
+    current_user: Annotated[models.User, Depends(auth.get_current_active_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    group = _get_group_for_member(db, group_id, current_user)
+    user_to_invite = (
+        db.query(models.User).filter(models.User.username == invite.username).first()
+    )
+    if not user_to_invite:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    membership = (
+        db.query(models.GroupMembership)
+        .filter(
+            models.GroupMembership.group_id == group_id,
+            models.GroupMembership.user_id == user_to_invite.id,
+        )
+        .first()
+    )
+    if membership:
+        if membership.status == "accepted":
+            raise HTTPException(status_code=400, detail="User is already in group")
+        membership.invited_by_id = cast(Any, current_user.id)
+        membership.status = cast(Any, "pending")
+    else:
+        db.add(
+            models.GroupMembership(
+                group_id=group_id,
+                user_id=user_to_invite.id,
+                invited_by_id=current_user.id,
+                status="pending",
+            )
+        )
+
+    db.commit()
+    db.refresh(group)
+    return group
+
+
+@app.post("/groups/{group_id}/accept", response_model=schemas.Group)
+async def accept_group_invite(
+    group_id: int,
+    current_user: Annotated[models.User, Depends(auth.get_current_active_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    membership = (
+        db.query(models.GroupMembership)
+        .filter(
+            models.GroupMembership.group_id == group_id,
+            models.GroupMembership.user_id == current_user.id,
+        )
+        .first()
+    )
+    if not membership:
+        raise HTTPException(status_code=404, detail="Invite not found")
+    membership.status = cast(Any, "accepted")
+    db.commit()
+
+    group = db.query(models.Group).filter(models.Group.id == group_id).first()
+    if not group:
+        raise HTTPException(status_code=404, detail="Group not found")
+    return group
 
 
 # --- Cities Management ---
@@ -564,8 +763,7 @@ async def create_research_thread(
     db: Annotated[Session, Depends(get_db)],
 ):
     db_thread = models.ResearchThread(
-        title=thread_in.title or "New Research",
-        user_id=current_user.id
+        title=thread_in.title or "New Research", user_id=current_user.id
     )
     db.add(db_thread)
     db.commit()
@@ -578,9 +776,11 @@ async def list_research_threads(
     current_user: Annotated[models.User, Depends(auth.get_current_active_user)],
     db: Annotated[Session, Depends(get_db)],
 ):
-    return db.query(models.ResearchThread).filter(
-        models.ResearchThread.user_id == current_user.id
-    ).all()
+    return (
+        db.query(models.ResearchThread)
+        .filter(models.ResearchThread.user_id == current_user.id)
+        .all()
+    )
 
 
 @app.post("/research", response_model=schemas.ResearchResponse)
@@ -597,32 +797,45 @@ async def research(
         history = []
 
         if thread_id:
-            db_thread = db.query(models.ResearchThread).filter(
-                models.ResearchThread.id == thread_id,
-                models.ResearchThread.user_id == current_user.id
-            ).first()
+            db_thread = (
+                db.query(models.ResearchThread)
+                .filter(
+                    models.ResearchThread.id == thread_id,
+                    models.ResearchThread.user_id == current_user.id,
+                )
+                .first()
+            )
             if not db_thread:
                 raise HTTPException(status_code=404, detail="Thread not found")
 
             # Load last 10 messages for context
-            db_messages = db.query(models.ResearchMessage).filter(
-                models.ResearchMessage.thread_id == thread_id
-            ).order_by(models.ResearchMessage.created_at.asc()).limit(10).all()
+            db_messages = (
+                db.query(models.ResearchMessage)
+                .filter(models.ResearchMessage.thread_id == thread_id)
+                .order_by(models.ResearchMessage.created_at.asc())
+                .limit(10)
+                .all()
+            )
 
             history = [{"role": m.role, "content": m.content} for m in db_messages]
         else:
             # Create a new thread if none provided
             db_thread = models.ResearchThread(
-                title=request.query[:50] + "...",
-                user_id=current_user.id
+                title=request.query[:50] + "...", user_id=current_user.id
             )
             db.add(db_thread)
             db.commit()
             db.refresh(db_thread)
             thread_id = db_thread.id
 
+        research_query = request.query
+        if request.group_id:
+            group = _get_group_for_member(db, request.group_id, current_user)
+            group_context = _build_group_research_context(db, group)
+            research_query = f"{request.query}\n\n{group_context}"
+
         # Run research with history
-        answer = await run_research(request.query, history)
+        answer = await run_research(research_query, history)
 
         # Save messages
         user_msg = models.ResearchMessage(
@@ -679,10 +892,14 @@ async def capture_research_to_passport(
     Captures a research thread and updates the user's passport
     (description) with Markdown.
     """
-    db_thread = db.query(models.ResearchThread).filter(
-        models.ResearchThread.id == request.thread_id,
-        models.ResearchThread.user_id == current_user.id
-    ).first()
+    db_thread = (
+        db.query(models.ResearchThread)
+        .filter(
+            models.ResearchThread.id == request.thread_id,
+            models.ResearchThread.user_id == current_user.id,
+        )
+        .first()
+    )
 
     if not db_thread:
         raise HTTPException(status_code=404, detail="Thread not found")
@@ -729,7 +946,7 @@ async def upload_image(
             Bucket=bucket_name,
             Key=object_name,
             Body=content,
-            ContentType=file.content_type
+            ContentType=file.content_type,
         )
 
         endpoint = os.getenv("TIGRIS_STORAGE_ENDPOINT")

@@ -36,6 +36,78 @@ def bootstrap():
             db.commit()
             db.refresh(admin_user)
 
+        from auth import generate_api_key, get_password_hash
+
+        mock_users = [
+            {
+                "username": "maya",
+                "email": "maya@example.com",
+                "description": (
+                    "KNOWHERE PASSPORT\nTraveler style: slow mornings, independent "
+                    "bookstores, design hotels, vegetarian food, and low-noise cafes. "
+                    "Budget: mid-range. Avoids packed nightlife."
+                ),
+            },
+            {
+                "username": "leo",
+                "email": "leo@example.com",
+                "description": (
+                    "KNOWHERE PASSPORT\nTraveler style: live music, street food, urban "
+                    "photography, late dinners, and transit-first exploring. "
+                    "Budget: flexible."
+                ),
+            },
+            {
+                "username": "nina",
+                "email": "nina@example.com",
+                "description": (
+                    "KNOWHERE PASSPORT\nTraveler style: museums, architecture walks, "
+                    "accessible routes, seafood, and one high-end meal per trip. "
+                    "Prefers a relaxed pace."
+                ),
+            },
+            {
+                "username": "omar",
+                "email": "omar@example.com",
+                "description": (
+                    "KNOWHERE PASSPORT\nTraveler style: biking, waterfront views, "
+                    "local markets, craft coffee, and active afternoons. "
+                    "Budget-conscious."
+                ),
+            },
+            {
+                "username": "sara",
+                "email": "sara@example.com",
+                "description": (
+                    "KNOWHERE PASSPORT\nTraveler style: family-friendly plans, parks, "
+                    "hands-on workshops, bakeries, and early evenings. Needs "
+                    "gluten-free options."
+                ),
+            },
+        ]
+
+        users_by_name = {"admin": admin_user}
+        for user_data in mock_users:
+            user = (
+                db.query(models.User)
+                .filter(models.User.username == user_data["username"])
+                .first()
+            )
+            if not user:
+                print(f"Creating mock user: {user_data['username']}...")
+                user = models.User(
+                    username=user_data["username"],
+                    email=user_data["email"],
+                    hashed_password=get_password_hash("password123"),
+                    api_key=generate_api_key(),
+                    is_admin=False,
+                    description=user_data["description"],
+                )
+                db.add(user)
+                db.commit()
+                db.refresh(user)
+            users_by_name[cast(str, user.username)] = user
+
         # 2. Create Cities
         # San Francisco
         sf = db.query(models.City).filter(models.City.name == "San Francisco").first()
@@ -151,13 +223,75 @@ def bootstrap():
                 "owner_type": "vendor",
                 "owner_id": v2.id,
             },
+            {
+                "title": "Mission Murals and Taquerias Walk",
+                "description": (
+                    "Street art, local history, and a vegetarian-friendly taco crawl."
+                ),
+                "start_time": now + timedelta(days=4, hours=11),
+                "end_time": now + timedelta(days=4, hours=14),
+                "location": Point(-122.414, 37.759),
+                "owner_type": "city",
+                "owner_id": sf.id,
+            },
+            {
+                "title": "Ferry Building Market Morning",
+                "description": (
+                    "Coffee, bakeries, seafood counters, and maker stalls by the bay."
+                ),
+                "start_time": now + timedelta(days=5, hours=9),
+                "end_time": now + timedelta(days=5, hours=12),
+                "location": Point(-122.393, 37.795),
+                "owner_type": "city",
+                "owner_id": sf.id,
+            },
+            {
+                "title": "Golden Gate Park Bike Picnic",
+                "description": (
+                    "Easy bike route through gardens with a flexible picnic stop."
+                ),
+                "start_time": now + timedelta(days=6, hours=13),
+                "end_time": now + timedelta(days=6, hours=16),
+                "location": Point(-122.486, 37.769),
+                "owner_type": "vendor",
+                "owner_id": v1.id,
+            },
+            {
+                "title": "Chelsea Gallery and High Line Loop",
+                "description": (
+                    "Contemporary galleries, architecture stops, and a sunset walk."
+                ),
+                "start_time": now + timedelta(days=4, hours=15),
+                "end_time": now + timedelta(days=4, hours=18),
+                "location": Point(-74.004, 40.748),
+                "owner_type": "city",
+                "owner_id": ny.id,
+            },
+            {
+                "title": "Lower East Side Music Crawl",
+                "description": (
+                    "Small venues, late bites, and street photography between sets."
+                ),
+                "start_time": now + timedelta(days=5, hours=20),
+                "end_time": now + timedelta(days=5, hours=23),
+                "location": Point(-73.989, 40.721),
+                "owner_type": "vendor",
+                "owner_id": v2.id,
+            },
+            {
+                "title": "Brooklyn Bridge Family Sketch Walk",
+                "description": "Accessible skyline walk with hands-on sketching.",
+                "start_time": now + timedelta(days=6, hours=10),
+                "end_time": now + timedelta(days=6, hours=12),
+                "location": Point(-73.996, 40.706),
+                "owner_type": "city",
+                "owner_id": ny.id,
+            },
         ]
 
         for ed in events_data:
             existing = (
-                db.query(models.Event)
-                .filter(models.Event.title == ed["title"])
-                .first()
+                db.query(models.Event).filter(models.Event.title == ed["title"]).first()
             )
             if not existing:
                 print(f"Adding Event: {ed['title']}...")
@@ -171,6 +305,173 @@ def bootstrap():
                     owner_id=ed["owner_id"],
                 )
                 db.add(event)
+
+        db.commit()
+
+        events_by_title = {
+            cast(str, event.title): event
+            for event in db.query(models.Event)
+            .filter(models.Event.title.in_([ed["title"] for ed in events_data]))
+            .all()
+        }
+
+        attendance = {
+            "maya": [
+                "SF Foodie Tour",
+                "Mission Murals and Taquerias Walk",
+                "Chelsea Gallery and High Line Loop",
+            ],
+            "leo": [
+                "Lower East Side Music Crawl",
+                "Broadway Behind the Scenes",
+                "Mission Murals and Taquerias Walk",
+            ],
+            "nina": [
+                "Broadway Behind the Scenes",
+                "Chelsea Gallery and High Line Loop",
+                "Ferry Building Market Morning",
+            ],
+            "omar": [
+                "Parasailing in the Bay",
+                "Golden Gate Park Bike Picnic",
+                "Ferry Building Market Morning",
+            ],
+            "sara": [
+                "Central Park Morning Yoga",
+                "Brooklyn Bridge Family Sketch Walk",
+                "Ferry Building Market Morning",
+            ],
+        }
+        for username, titles in attendance.items():
+            user = users_by_name[username]
+            for title in titles:
+                event = events_by_title.get(title)
+                if event and event not in user.attended_events:
+                    user.attended_events.append(event)
+
+        detours_data = [
+            {
+                "username": "maya",
+                "name": "Quiet Creative SF Day",
+                "description": (
+                    "Murals, vegetarian lunch, and a cafe reset before sunset."
+                ),
+                "events": [
+                    "Mission Murals and Taquerias Walk",
+                    "Ferry Building Market Morning",
+                ],
+            },
+            {
+                "username": "leo",
+                "name": "Late Night NYC Pulse",
+                "description": (
+                    "Galleries first, then live music and street food after dark."
+                ),
+                "events": [
+                    "Chelsea Gallery and High Line Loop",
+                    "Lower East Side Music Crawl",
+                ],
+            },
+            {
+                "username": "nina",
+                "name": "Accessible Arts Weekend",
+                "description": (
+                    "Architecture, museums, seafood, and a relaxed walking pace."
+                ),
+                "events": [
+                    "Broadway Behind the Scenes",
+                    "Chelsea Gallery and High Line Loop",
+                ],
+            },
+            {
+                "username": "omar",
+                "name": "Waterfront Active Loop",
+                "description": "Bay views, bikes, markets, and casual food stops.",
+                "events": ["Parasailing in the Bay", "Golden Gate Park Bike Picnic"],
+            },
+            {
+                "username": "sara",
+                "name": "Family Friendly City Morning",
+                "description": "Early outdoor activities with flexible food options.",
+                "events": [
+                    "Central Park Morning Yoga",
+                    "Brooklyn Bridge Family Sketch Walk",
+                ],
+            },
+        ]
+        for detour_data in detours_data:
+            user = users_by_name[cast(str, detour_data["username"])]
+            detour = (
+                db.query(models.Detour)
+                .filter(
+                    models.Detour.user_id == user.id,
+                    models.Detour.name == detour_data["name"],
+                )
+                .first()
+            )
+            if not detour:
+                print(f"Adding Detour: {detour_data['name']}...")
+                detour = models.Detour(
+                    name=detour_data["name"],
+                    description=detour_data["description"],
+                    user_id=user.id,
+                )
+                db.add(detour)
+                db.flush()
+                for order, title in enumerate(detour_data["events"]):
+                    event = events_by_title.get(title)
+                    if event:
+                        db.add(
+                            models.DetourEvent(
+                                detour_id=detour.id,
+                                event_id=event.id,
+                                order=order,
+                            )
+                        )
+
+        group = (
+            db.query(models.Group)
+            .filter(models.Group.name == "Spring City Sampler")
+            .first()
+        )
+        if not group:
+            print("Adding Group: Spring City Sampler...")
+            group = models.Group(
+                name="Spring City Sampler",
+                description=(
+                    "A mixed-preference long weekend with food, music, art, "
+                    "accessible routes, and one active outdoor block."
+                ),
+                owner_id=users_by_name["maya"].id,
+            )
+            db.add(group)
+            db.flush()
+
+        group_members = {
+            "maya": "accepted",
+            "leo": "accepted",
+            "nina": "accepted",
+            "omar": "pending",
+        }
+        for username, member_status in group_members.items():
+            user = users_by_name[username]
+            membership = (
+                db.query(models.GroupMembership)
+                .filter(
+                    models.GroupMembership.group_id == group.id,
+                    models.GroupMembership.user_id == user.id,
+                )
+                .first()
+            )
+            if not membership:
+                db.add(
+                    models.GroupMembership(
+                        group_id=group.id,
+                        user_id=user.id,
+                        invited_by_id=users_by_name["maya"].id,
+                        status=member_status,
+                    )
+                )
 
         db.commit()
         print("Bootstrap complete!")

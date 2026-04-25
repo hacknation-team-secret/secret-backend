@@ -73,6 +73,47 @@ class User(Base):
         "Detour", secondary="detour_shares", back_populates="shared_with"
     )
     research_threads = relationship("ResearchThread", back_populates="user")
+    owned_groups = relationship("Group", back_populates="owner")
+    group_memberships = relationship(
+        "GroupMembership",
+        back_populates="user",
+        foreign_keys="GroupMembership.user_id",
+    )
+
+
+class Group(Base):
+    __tablename__ = "groups"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, index=True)
+    description = Column(Text, nullable=True)
+    owner_id = Column(Integer, ForeignKey("users.id"))
+    created_at = Column(DateTime, default=lambda: datetime.now(UTC))
+
+    owner = relationship("User", back_populates="owned_groups")
+    memberships = relationship(
+        "GroupMembership",
+        back_populates="group",
+        cascade="all, delete-orphan",
+    )
+
+
+class GroupMembership(Base):
+    __tablename__ = "group_memberships"
+
+    group_id = Column(Integer, ForeignKey("groups.id"), primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), primary_key=True)
+    invited_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    status = Column(String, default="pending")
+    created_at = Column(DateTime, default=lambda: datetime.now(UTC))
+
+    group = relationship("Group", back_populates="memberships")
+    user = relationship(
+        "User",
+        back_populates="group_memberships",
+        foreign_keys=[user_id],
+    )
+    invited_by = relationship("User", foreign_keys=[invited_by_id])
 
 
 class ResearchThread(Base):
@@ -85,9 +126,7 @@ class ResearchThread(Base):
 
     user = relationship("User", back_populates="research_threads")
     messages = relationship(
-        "ResearchMessage",
-        back_populates="thread",
-        cascade="all, delete-orphan"
+        "ResearchMessage", back_populates="thread", cascade="all, delete-orphan"
     )
 
 

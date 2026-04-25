@@ -28,7 +28,7 @@ def get_research_agent():
 
     model = ChatOpenAI(model_name="gpt-4o")
 
-    today_date = datetime.today().strftime('%B %d, %Y')
+    today_date = datetime.today().strftime("%B %d, %Y")
     system_prompt = (
         f"You are a helpful research assistant. Today's date is {today_date}. "
         "Use web search to find accurate, up-to-date information. "
@@ -45,6 +45,7 @@ def get_research_agent():
 
     return agent
 
+
 async def run_research(query: str, history: list[dict] | None = None):
     """
     Runs a research query through the agent and returns the response.
@@ -54,9 +55,7 @@ async def run_research(query: str, history: list[dict] | None = None):
     messages = history or []
     messages.append({"role": "user", "content": query})
 
-    response = await agent.ainvoke({
-        "messages": messages
-    })
+    response = await agent.ainvoke({"messages": messages})
 
     return response["messages"][-1].content
 
@@ -83,14 +82,18 @@ def _extract_count(label: str, text: str) -> int | None:
     return int(value.replace(",", ""))
 
 
-def _parse_instagram_profile(url: str, raw_content: str | None, images: list[str]) -> dict[str, Any]:
+def _parse_instagram_profile(
+    url: str, raw_content: str | None, images: list[str]
+) -> dict[str, Any]:
     content = raw_content or ""
     username = _extract_instagram_username(url)
 
     display_name = _extract_first_match(r"^#\s+(.+)$", content)
     bio = _extract_first_match(r"Bio\s*\n+(.+?)(?:\n{2,}|\Z)", content)
     if not bio:
-        bio = _extract_first_match(rf"{re.escape(username or '')}\s*\([^)]*\)\s*(.+)", content)
+        bio = _extract_first_match(
+            rf"{re.escape(username or '')}\s*\([^)]*\)\s*(.+)", content
+        )
 
     external_url = _extract_first_match(r"(https?://[^\s)]+)", content)
     profile_image_url = images[0] if images else None

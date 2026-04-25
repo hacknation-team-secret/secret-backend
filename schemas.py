@@ -1,4 +1,3 @@
-
 from datetime import datetime
 from typing import Literal
 
@@ -9,8 +8,10 @@ class ItemBase(BaseModel):
     name: str
     description: str | None = None
 
+
 class ItemCreate(ItemBase):
     pass
+
 
 class Item(ItemBase):
     id: int
@@ -22,15 +23,19 @@ class UserBase(BaseModel):
     username: str
     email: str | None = None
 
+
 class UserCreate(UserBase):
     password: str
+
 
 class UserUpdatePassword(BaseModel):
     old_password: str
     new_password: str
 
+
 class UserUpdateDescription(BaseModel):
     description: str
+
 
 class User(UserBase):
     id: int
@@ -41,9 +46,47 @@ class User(UserBase):
 
     model_config = ConfigDict(from_attributes=True)
 
+
+class UserPublic(UserBase):
+    id: int
+    description: str | None = None
+    research_count: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class GroupCreate(BaseModel):
+    name: str
+    description: str | None = None
+
+
+class GroupInvite(BaseModel):
+    username: str
+
+
+class GroupMembership(BaseModel):
+    user: UserPublic
+    status: str
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class Group(BaseModel):
+    id: int
+    name: str
+    description: str | None = None
+    owner_id: int
+    created_at: datetime
+    memberships: list[GroupMembership]
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class Token(BaseModel):
     access_token: str
     token_type: str
+
 
 class TokenData(BaseModel):
     username: str | None = None
@@ -54,8 +97,10 @@ class CityBase(BaseModel):
     name: str
     boundary: list[list[list[float]]]  # GeoJSON Polygon coordinates style
 
+
 class CityCreate(CityBase):
     pass
+
 
 class City(CityBase):
     id: int
@@ -66,8 +111,10 @@ class City(CityBase):
 class VendorBase(BaseModel):
     name: str
 
+
 class VendorCreate(VendorBase):
     pass
+
 
 class Vendor(VendorBase):
     id: int
@@ -82,9 +129,11 @@ class EventBase(BaseModel):
     end_time: datetime
     location: list[float]  # [longitude, latitude]
 
+
 class EventCreate(EventBase):
     owner_type: str  # 'city' or 'vendor'
     owner_id: int
+
 
 class Event(EventBase):
     id: int
@@ -98,6 +147,7 @@ class DetourEventBase(BaseModel):
     event_id: int
     order: int
 
+
 class DetourEvent(DetourEventBase):
     event: Event
 
@@ -108,8 +158,10 @@ class DetourBase(BaseModel):
     name: str
     description: str | None = None
 
+
 class DetourCreate(DetourBase):
     event_ids: list[int]
+
 
 class Detour(DetourBase):
     id: int
@@ -131,17 +183,21 @@ class ResearchMessageBase(BaseModel):
     role: str
     content: str
 
+
 class ResearchMessage(ResearchMessageBase):
     id: int
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
 
+
 class ResearchThreadBase(BaseModel):
     title: str | None = None
 
+
 class ResearchThreadCreate(ResearchThreadBase):
     pass
+
 
 class ResearchThread(ResearchThreadBase):
     id: int
@@ -154,6 +210,7 @@ class ResearchThread(ResearchThreadBase):
 class ResearchRequest(BaseModel):
     query: str
     thread_id: int | None = None
+    group_id: int | None = None
 
 
 class ResearchResponse(BaseModel):
