@@ -200,6 +200,65 @@ class ResearchMessage(Base):
     thread = relationship("ResearchThread", back_populates="messages")
 
 
+class SharedWallet(Base):
+    __tablename__ = "shared_wallets"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, index=True)
+    currency = Column(String, default="USD")
+    total_balance_cents = Column(Integer, default=0)
+    spending_limit_cents = Column(Integer, nullable=True)
+    alert_threshold_percent = Column(Integer, default=20)
+    join_code = Column(String, unique=True, index=True)
+    created_by = Column(Integer, ForeignKey("users.id"))
+    created_at = Column(DateTime, default=lambda: datetime.now(UTC))
+
+    creator = relationship("User")
+    members = relationship(
+        "WalletMember",
+        back_populates="wallet",
+        cascade="all, delete-orphan",
+    )
+    transactions = relationship(
+        "WalletTransaction",
+        back_populates="wallet",
+        cascade="all, delete-orphan",
+        order_by="desc(WalletTransaction.created_at)",
+    )
+
+
+class WalletMember(Base):
+    __tablename__ = "wallet_members"
+
+    user_id = Column(Integer, ForeignKey("users.id"), primary_key=True)
+    wallet_id = Column(Integer, ForeignKey("shared_wallets.id"), primary_key=True)
+    role = Column(String, default="member")
+    contributed_cents = Column(Integer, default=0)
+    spent_cents = Column(Integer, default=0)
+    joined_at = Column(DateTime, default=lambda: datetime.now(UTC))
+
+    user = relationship("User")
+    wallet = relationship("SharedWallet", back_populates="members")
+
+
+class WalletTransaction(Base):
+    __tablename__ = "wallet_transactions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    wallet_id = Column(Integer, ForeignKey("shared_wallets.id"))
+    type = Column(String)  # topup | spend | refund
+    amount_cents = Column(Integer)
+    initiated_by = Column(Integer, ForeignKey("users.id"))
+    merchant = Column(String, nullable=True)
+    category = Column(String, nullable=True)
+    description = Column(Text, nullable=True)
+    metadata_json = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(UTC))
+
+    wallet = relationship("SharedWallet", back_populates="transactions")
+    initiator = relationship("User")
+
+
 class City(Base):
     __tablename__ = "cities"
 

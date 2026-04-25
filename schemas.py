@@ -130,6 +130,16 @@ class TokenData(BaseModel):
     username: str | None = None
 
 
+class PublicUser(BaseModel):
+    id: int
+    username: str
+    email: str | None = None
+    description: str | None = None
+    research_count: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 # New Entity Schemas
 class CityBase(BaseModel):
     name: str
@@ -291,3 +301,78 @@ class ResearchExtractResponse(BaseModel):
     error: str | None = None
     tavily_request_id: str | None = None
     tavily_response_time: float | None = None
+
+
+class WalletMember(BaseModel):
+    user: PublicUser
+    role: str
+    contributed_cents: int
+    spent_cents: int
+    joined_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class WalletTransaction(BaseModel):
+    id: int
+    wallet_id: int
+    type: str
+    amount_cents: int
+    initiated_by: int
+    merchant: str | None = None
+    category: str | None = None
+    description: str | None = None
+    metadata_json: str | None = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class SharedWalletBase(BaseModel):
+    name: str
+    currency: str = "USD"
+    spending_limit_cents: int | None = None
+    alert_threshold_percent: int = 20
+
+
+class SharedWalletCreate(SharedWalletBase):
+    pass
+
+
+class SharedWalletUpdate(BaseModel):
+    spending_limit_cents: int | None = None
+    alert_threshold_percent: int | None = None
+
+
+class SharedWalletJoinRequest(BaseModel):
+    join_code: str
+
+
+class SharedWalletFundRequest(BaseModel):
+    amount_cents: int
+    payment_method: str
+    description: str | None = None
+
+
+class SharedWalletSpendRequest(BaseModel):
+    amount_cents: int
+    merchant: str
+    category: str | None = None
+    description: str | None = None
+    metadata_json: str | None = None
+
+
+class SharedWalletResponse(BaseModel):
+    id: int
+    name: str
+    currency: str
+    total_balance_cents: int
+    spending_limit_cents: int | None = None
+    alert_threshold_percent: int
+    join_code: str
+    created_by: int
+    created_at: datetime
+    members: list[WalletMember]
+    transactions: list[WalletTransaction] = Field(default_factory=list)
+
+    model_config = ConfigDict(from_attributes=True)

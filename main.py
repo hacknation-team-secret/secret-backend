@@ -1,4 +1,5 @@
 import os
+import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, cast
@@ -202,6 +203,66 @@ def _favorite_to_dict(
     }
 
 
+def wallet_to_dict(db_wallet: models.SharedWallet):
+    return {
+        "id": db_wallet.id,
+        "name": db_wallet.name,
+        "currency": db_wallet.currency,
+        "total_balance_cents": db_wallet.total_balance_cents,
+        "spending_limit_cents": db_wallet.spending_limit_cents,
+        "alert_threshold_percent": db_wallet.alert_threshold_percent,
+        "join_code": db_wallet.join_code,
+        "created_by": db_wallet.created_by,
+        "created_at": db_wallet.created_at,
+        "members": [
+            {
+                "user": member.user,
+                "role": member.role,
+                "contributed_cents": member.contributed_cents,
+                "spent_cents": member.spent_cents,
+                "joined_at": member.joined_at,
+            }
+            for member in db_wallet.members
+        ],
+        "transactions": [
+            {
+                "id": txn.id,
+                "wallet_id": txn.wallet_id,
+                "type": txn.type,
+                "amount_cents": txn.amount_cents,
+                "initiated_by": txn.initiated_by,
+                "merchant": txn.merchant,
+                "category": txn.category,
+                "description": txn.description,
+                "metadata_json": txn.metadata_json,
+                "created_at": txn.created_at,
+            }
+            for txn in db_wallet.transactions
+        ],
+    }
+
+
+def generate_join_code() -> str:
+    return secrets.token_urlsafe(6).upper()
+
+
+def get_wallet_for_member(
+    db: Session,
+    wallet_id: int,
+    user_id: int,
+    lock: bool = False,
+):
+    query = db.query(models.SharedWallet).filter(models.SharedWallet.id == wallet_id)
+    if lock:
+        query = query.with_for_update()
+    wallet = query.first()
+    if not wallet:
+        raise HTTPException(status_code=404, detail="Shared wallet not found")
+
+    member = next((m for m in wallet.members if m.user_id == user_id), None)
+    if not member:
+        raise HTTPException(status_code=403, detail="Not authorized for this wallet")
+    return wallet, member
 @app.get("/docs", include_in_schema=False)
 async def scalar_html():
     from scalar_fastapi import get_scalar_api_reference
@@ -940,6 +1001,196 @@ async def create_item(
     db.commit()
     db.refresh(db_item)
     return db_item
+
+
+# --- Shared Wallets ---
+
+
+@app.get("/wallets/shared", response_model=list[schemas.SharedWalletResponse])
+async def list_shared_wallets(
+    current_user: Annotated[models.User, Depends(auth.get_current_active_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    wallets = (
+        db.query(models.SharedWallet)
+        .join(models.WalletMember, models.WalletMember.wallet_id == models.SharedWallet.id)
+        .filter(models.WalletMember.user_id == current_user.id)
+        .all()
+    )
+    return [wallet_to_dict(wallet) for wallet in wallets]
+
+
+@app.post("/wallets/shared", response_model=schemas.SharedWalletResponse)
+async def create_shared_wallet(
+    wallet_in: schemas.SharedWalletCreate,
+    current_user: Annotated[models.User, Depends(auth.get_current_active_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    join_code = generate_join_code()
+    while db.query(models.SharedWallet).filter(models.SharedWallet.join_code == join_code).first():
+        join_code = generate_join_code()
+
+    wallet = models.SharedWallet(
+        name=wallet_in.name,
+        currency=wallet_in.currency,
+        spending_limit_cents=wallet_in.spending_limit_cents,
+        alert_threshold_percent=wallet_in.alert_threshold_percent,
+        join_code=join_code,
+        created_by=current_user.id,
+    )
+    db.add(wallet)
+    db.flush()
+    db.add(
+        models.WalletMember(
+            user_id=current_user.id,
+            wallet_id=wallet.id,
+            role="admin",
+        )
+    )
+    db.commit()
+    db.refresh(wallet)
+    return wallet_to_dict(wallet)
+
+
+@app.post("/wallets/shared/join", response_model=schemas.SharedWalletResponse)
+async def join_shared_wallet(
+    join_in: schemas.SharedWalletJoinRequest,
+    current_user: Annotated[models.User, Depends(auth.get_current_active_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    wallet = (
+        db.query(models.SharedWallet)
+        .filter(models.SharedWallet.join_code == join_in.join_code.upper())
+        .first()
+    )
+    if not wallet:
+        raise HTTPException(status_code=404, detail="Shared wallet not found")
+
+    existing = (
+        db.query(models.WalletMember)
+        .filter_by(wallet_id=wallet.id, user_id=current_user.id)
+        .first()
+    )
+    if not existing:
+        db.add(
+            models.WalletMember(
+                user_id=current_user.id,
+                wallet_id=wallet.id,
+                role="member",
+            )
+        )
+        db.commit()
+        db.refresh(wallet)
+    return wallet_to_dict(wallet)
+
+
+@app.get("/wallets/{wallet_id}", response_model=schemas.SharedWalletResponse)
+async def get_shared_wallet(
+    wallet_id: int,
+    current_user: Annotated[models.User, Depends(auth.get_current_active_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    wallet, _member = get_wallet_for_member(db, wallet_id, current_user.id)
+    return wallet_to_dict(wallet)
+
+
+@app.patch("/wallets/{wallet_id}", response_model=schemas.SharedWalletResponse)
+async def update_shared_wallet(
+    wallet_id: int,
+    wallet_in: schemas.SharedWalletUpdate,
+    current_user: Annotated[models.User, Depends(auth.get_current_active_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    wallet, member = get_wallet_for_member(db, wallet_id, current_user.id, lock=True)
+    if member.role != "admin":
+        raise HTTPException(status_code=403, detail="Only admins can update wallet settings")
+
+    if wallet_in.alert_threshold_percent is not None:
+        wallet.alert_threshold_percent = wallet_in.alert_threshold_percent
+    if wallet_in.spending_limit_cents is not None:
+        wallet.spending_limit_cents = wallet_in.spending_limit_cents
+    db.commit()
+    db.refresh(wallet)
+    return wallet_to_dict(wallet)
+
+
+@app.get("/wallets/{wallet_id}/transactions", response_model=list[schemas.WalletTransaction])
+async def list_wallet_transactions(
+    wallet_id: int,
+    current_user: Annotated[models.User, Depends(auth.get_current_active_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    wallet, _member = get_wallet_for_member(db, wallet_id, current_user.id)
+    return wallet.transactions
+
+
+@app.post("/wallets/{wallet_id}/fund", response_model=schemas.SharedWalletResponse)
+async def fund_shared_wallet(
+    wallet_id: int,
+    fund_in: schemas.SharedWalletFundRequest,
+    current_user: Annotated[models.User, Depends(auth.get_current_active_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    if fund_in.amount_cents <= 0:
+        raise HTTPException(status_code=400, detail="Funding amount must be positive")
+
+    wallet, member = get_wallet_for_member(db, wallet_id, current_user.id, lock=True)
+    wallet.total_balance_cents += fund_in.amount_cents
+    member.contributed_cents += fund_in.amount_cents
+    db.add(
+        models.WalletTransaction(
+            wallet_id=wallet.id,
+            type="topup",
+            amount_cents=fund_in.amount_cents,
+            initiated_by=current_user.id,
+            merchant=fund_in.payment_method,
+            description=fund_in.description or f"Funded via {fund_in.payment_method}",
+            metadata_json=f'{{"payment_method":"{fund_in.payment_method}"}}',
+        )
+    )
+    db.commit()
+    db.refresh(wallet)
+    return wallet_to_dict(wallet)
+
+
+@app.post("/wallets/{wallet_id}/spend", response_model=schemas.SharedWalletResponse)
+async def spend_shared_wallet(
+    wallet_id: int,
+    spend_in: schemas.SharedWalletSpendRequest,
+    current_user: Annotated[models.User, Depends(auth.get_current_active_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    if spend_in.amount_cents <= 0:
+        raise HTTPException(status_code=400, detail="Spend amount must be positive")
+
+    wallet, member = get_wallet_for_member(db, wallet_id, current_user.id, lock=True)
+    if wallet.total_balance_cents < spend_in.amount_cents:
+        raise HTTPException(status_code=400, detail="Insufficient shared wallet balance")
+
+    projected_balance = wallet.total_balance_cents - spend_in.amount_cents
+    if (
+        wallet.spending_limit_cents is not None
+        and spend_in.amount_cents > wallet.spending_limit_cents
+    ):
+        raise HTTPException(status_code=400, detail="Spend exceeds wallet spending limit")
+
+    wallet.total_balance_cents = projected_balance
+    member.spent_cents += spend_in.amount_cents
+    db.add(
+        models.WalletTransaction(
+            wallet_id=wallet.id,
+            type="spend",
+            amount_cents=spend_in.amount_cents,
+            initiated_by=current_user.id,
+            merchant=spend_in.merchant,
+            category=spend_in.category,
+            description=spend_in.description,
+            metadata_json=spend_in.metadata_json,
+        )
+    )
+    db.commit()
+    db.refresh(wallet)
+    return wallet_to_dict(wallet)
 
 
 # --- AI Research & Storage ---
