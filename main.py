@@ -3,10 +3,10 @@ from typing import Annotated
 
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
-from sqlalchemy import func, select
-from sqlalchemy.orm import Session
 from geoalchemy2.shape import from_shape, to_shape
 from shapely.geometry import Point, Polygon
+from sqlalchemy import func
+from sqlalchemy.orm import Session
 
 import auth
 import models
@@ -25,6 +25,35 @@ app = FastAPI(
     redoc_url=None,
 )
 
+# Helper to convert models.Event to dict for Pydantic
+def event_to_dict(db_event: models.Event):
+    point = to_shape(db_event.location)
+    return {
+        "id": db_event.id,
+        "title": db_event.title,
+        "description": db_event.description,
+        "start_time": db_event.start_time,
+        "end_time": db_event.end_time,
+        "location": [point.x, point.y],
+        "owner_type": db_event.owner_type,
+        "owner_id": db_event.owner_id
+    }
+
+def detour_to_dict(db_detour: models.Detour):
+    return {
+        "id": db_detour.id,
+        "name": db_detour.name,
+        "description": db_detour.description,
+        "user_id": db_detour.user_id,
+        "events": [
+            {
+                "event_id": de.event_id,
+                "order": de.order,
+                "event": event_to_dict(de.event)
+            } for de in db_detour.events
+        ]
+    }
+
 @app.get("/docs", include_in_schema=False)
 async def scalar_html():
     from scalar_fastapi import get_scalar_api_reference
@@ -38,10 +67,10 @@ async def signup(user: schemas.UserCreate, db: Annotated[Session, Depends(get_db
     db_user = db.query(models.User).filter(models.User.username == user.username).first()
     if db_user:
         raise HTTPException(status_code=400, detail="Username already registered")
-    
+
     hashed_password = auth.get_password_hash(user.password)
     api_key = auth.generate_api_key()
-    
+
     db_user = models.User(
         username=user.username,
         email=user.email,
@@ -96,7 +125,7 @@ async def change_password(
 ):
     if not auth.verify_password(password_data.old_password, current_user.hashed_password):
         raise HTTPException(status_code=400, detail="Incorrect old password")
-    
+
     current_user.hashed_password = auth.get_password_hash(password_data.new_password)
     db.commit()
     return {"message": "Password updated successfully"}
@@ -129,7 +158,7 @@ async def create_city(
     db.add(db_city)
     db.commit()
     db.refresh(db_city)
-    
+
     # Manually construct response because GeoAlchemy2 objects don't serialize easily to GeoJSON in Pydantic
     return {
         "id": db_city.id,
@@ -147,11 +176,11 @@ async def add_city_admin(
     city = db.query(models.City).filter(models.City.id == city_id).first()
     if not city:
         raise HTTPException(status_code=404, detail="City not found")
-    
+
     user_to_add = db.query(models.User).filter(models.User.username == username).first()
     if not user_to_add:
         raise HTTPException(status_code=404, detail="User not found")
-    
+
     if user_to_add not in city.admins:
         city.admins.append(user_to_add)
         db.commit()
@@ -183,12 +212,12 @@ async def authorize_vendor_in_city(
     city = db.query(models.City).filter(models.City.id == city_id).first()
     if not vendor or not city:
         raise HTTPException(status_code=404, detail="Vendor or City not found")
-    
+
     # Check if super admin or city admin
     is_city_admin = db.query(models.city_admins).filter_by(user_id=current_user.id, city_id=city_id).first()
     if not current_user.is_admin and not is_city_admin:
         raise HTTPException(status_code=403, detail="Not authorized to authorize vendors in this city")
-    
+
     if city not in vendor.authorized_cities:
         vendor.authorized_cities.append(city)
         db.commit()
@@ -204,7 +233,7 @@ async def add_vendor_admin(
     vendor = db.query(models.Vendor).filter(models.Vendor.id == vendor_id).first()
     if not vendor:
         raise HTTPException(status_code=404, detail="Vendor not found")
-    
+
     # Super admins or City admins of a city where the vendor is authorized
     is_authorized_city_admin = False
     if not current_user.is_admin:
@@ -221,7 +250,7 @@ async def add_vendor_admin(
     user_to_add = db.query(models.User).filter(models.User.username == username).first()
     if not user_to_add:
         raise HTTPException(status_code=404, detail="User not found")
-    
+
     if user_to_add not in vendor.admins:
         vendor.admins.append(user_to_add)
         db.commit()
@@ -236,7 +265,7 @@ async def create_event(
     db: Annotated[Session, Depends(get_db)]
 ):
     point = from_shape(Point(event.location[0], event.location[1]), srid=4326)
-    
+
     if event.owner_type == "city":
         # Check if current_user is admin of this city
         is_city_admin = db.query(models.city_admins).filter_by(
@@ -244,13 +273,13 @@ async def create_event(
         ).first()
         if not is_city_admin and not current_user.is_admin:
             raise HTTPException(status_code=403, detail="Not a city admin for this city")
-        
+
         # Check geo-fence
         city = db.query(models.City).filter(models.City.id == event.owner_id).first()
         is_inside = db.scalar(func.ST_Contains(city.boundary, point))
         if not is_inside:
             raise HTTPException(status_code=400, detail="Event location is outside the city boundary")
-            
+
     elif event.owner_type == "vendor":
         # Check if current_user is admin of this vendor
         is_vendor_admin = db.query(models.vendor_admins).filter_by(
@@ -258,7 +287,7 @@ async def create_event(
         ).first()
         if not is_vendor_admin and not current_user.is_admin:
             raise HTTPException(status_code=403, detail="Not a vendor admin for this vendor")
-        
+
         # Check if vendor is authorized in any city that contains this point
         vendor = db.query(models.Vendor).filter(models.Vendor.id == event.owner_id).first()
         authorized_cities = vendor.authorized_cities
@@ -267,7 +296,7 @@ async def create_event(
             if db.scalar(func.ST_Contains(city.boundary, point)):
                 is_inside_authorized_city = True
                 break
-        
+
         if not is_inside_authorized_city:
             raise HTTPException(status_code=400, detail="Vendor is not authorized to post events at this location")
     else:
@@ -285,7 +314,7 @@ async def create_event(
     db.add(db_event)
     db.commit()
     db.refresh(db_event)
-    
+
     return {
         "id": db_event.id,
         "title": db_event.title,
@@ -297,6 +326,136 @@ async def create_event(
         "owner_id": db_event.owner_id
     }
 
+
+# --- Passport & Attendance ---
+
+@app.post("/events/{event_id}/attend")
+async def attend_event(
+    event_id: int,
+    current_user: Annotated[models.User, Depends(auth.get_current_active_user)],
+    db: Annotated[Session, Depends(get_db)]
+):
+    event = db.query(models.Event).filter(models.Event.id == event_id).first()
+    if not event:
+        raise HTTPException(status_code=404, detail="Event not found")
+    if event not in current_user.attended_events:
+        current_user.attended_events.append(event)
+        db.commit()
+    return {"message": "Event added to attended history"}
+
+
+@app.get("/users/{username}/passport", response_model=schemas.Passport)
+async def get_passport(
+    username: str,
+    db: Annotated[Session, Depends(get_db)]
+):
+    user = db.query(models.User).filter(models.User.username == username).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    return {
+        "username": user.username,
+        "description": user.description,
+        "attended_events": [event_to_dict(e) for e in user.attended_events]
+    }
+
+
+# --- Detours Management ---
+
+@app.post("/detours", response_model=schemas.Detour)
+async def create_detour(
+    detour_in: schemas.DetourCreate,
+    current_user: Annotated[models.User, Depends(auth.get_current_active_user)],
+    db: Annotated[Session, Depends(get_db)]
+):
+    db_detour = models.Detour(
+        name=detour_in.name,
+        description=detour_in.description,
+        user_id=current_user.id
+    )
+    db.add(db_detour)
+    db.flush()
+
+    for index, event_id in enumerate(detour_in.event_ids):
+        # Verify event exists
+        event = db.query(models.Event).filter(models.Event.id == event_id).first()
+        if not event:
+            raise HTTPException(status_code=404, detail=f"Event {event_id} not found")
+
+        db_detour_event = models.DetourEvent(
+            detour_id=db_detour.id,
+            event_id=event_id,
+            order=index
+        )
+        db.add(db_detour_event)
+
+    db.commit()
+    db.refresh(db_detour)
+    return detour_to_dict(db_detour)
+
+
+@app.get("/detours/me", response_model=list[schemas.Detour])
+async def get_my_detours(
+    current_user: Annotated[models.User, Depends(auth.get_current_active_user)],
+    db: Annotated[Session, Depends(get_db)]
+):
+    return [detour_to_dict(d) for d in current_user.detours]
+
+
+@app.get("/detours/shared", response_model=list[schemas.Detour])
+async def get_shared_detours(
+    current_user: Annotated[models.User, Depends(auth.get_current_active_user)],
+    db: Annotated[Session, Depends(get_db)]
+):
+    return [detour_to_dict(d) for d in current_user.shared_detours]
+
+
+@app.get("/detours/{detour_id}", response_model=schemas.Detour)
+async def get_detour(
+    detour_id: int,
+    current_user: Annotated[models.User, Depends(auth.get_current_user_flexible)],
+    db: Annotated[Session, Depends(get_db)]
+):
+    detour = db.query(models.Detour).filter(models.Detour.id == detour_id).first()
+    if not detour:
+        raise HTTPException(status_code=404, detail="Detour not found")
+
+    # Check if owner or shared with or admin
+    is_shared = db.query(models.detour_shares).filter_by(
+        detour_id=detour_id, user_id=current_user.id
+    ).first() is not None
+
+    if not current_user.is_admin and detour.user_id != current_user.id and not is_shared:
+        raise HTTPException(status_code=403, detail="Not authorized to view this detour")
+
+    return detour_to_dict(detour)
+
+
+@app.post("/detours/{detour_id}/share")
+async def share_detour(
+    detour_id: int,
+    username: str,
+    current_user: Annotated[models.User, Depends(auth.get_current_active_user)],
+    db: Annotated[Session, Depends(get_db)]
+):
+    detour = db.query(models.Detour).filter(models.Detour.id == detour_id).first()
+    if not detour:
+        raise HTTPException(status_code=404, detail="Detour not found")
+
+    if detour.user_id != current_user.id and not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Only the owner can share this detour")
+
+    user_to_share_with = db.query(models.User).filter(models.User.username == username).first()
+    if not user_to_share_with:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if user_to_share_with not in detour.shared_with:
+        detour.shared_with.append(user_to_share_with)
+        db.commit()
+
+    return {"message": f"Detour shared with {username}"}
+
+
 @app.get("/items", response_model=list[schemas.Item])
 async def get_items(
     db: Annotated[Session, Depends(get_db)],
@@ -306,7 +465,7 @@ async def get_items(
 
 @app.post("/items", response_model=schemas.Item)
 async def create_item(
-    item: schemas.ItemCreate, 
+    item: schemas.ItemCreate,
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[models.User, Depends(auth.get_current_user_flexible)]
 ):

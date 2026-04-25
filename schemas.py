@@ -1,6 +1,7 @@
 
 from datetime import datetime
-from pydantic import BaseModel, ConfigDict, Field
+
+from pydantic import BaseModel, ConfigDict
 
 
 class ItemBase(BaseModel):
@@ -56,7 +57,7 @@ class CityCreate(CityBase):
 
 class City(CityBase):
     id: int
-    
+
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -68,7 +69,7 @@ class VendorCreate(VendorBase):
 
 class Vendor(VendorBase):
     id: int
-    
+
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -87,5 +88,38 @@ class Event(EventBase):
     id: int
     owner_type: str
     owner_id: int
-    
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DetourEventBase(BaseModel):
+    event_id: int
+    order: int
+
+class DetourEvent(DetourEventBase):
+    event: Event
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DetourBase(BaseModel):
+    name: str
+    description: str | None = None
+
+class DetourCreate(DetourBase):
+    event_ids: list[int]
+
+class Detour(DetourBase):
+    id: int
+    user_id: int
+    events: list[DetourEvent]
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class Passport(BaseModel):
+    username: str
+    description: str | None = None
+    attended_events: list[Event]
+
     model_config = ConfigDict(from_attributes=True)
