@@ -17,7 +17,7 @@ import auth
 import models
 import schemas
 from agent import run_extract_research, run_research
-from database import get_db
+from database import engine, get_db
 from storage import tigris_client
 
 # Hardcoded Supabase credentials
@@ -39,6 +39,13 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+async def ensure_shared_wallet_tables():
+    models.SharedWallet.__table__.create(bind=engine, checkfirst=True)
+    models.WalletMember.__table__.create(bind=engine, checkfirst=True)
+    models.WalletTransaction.__table__.create(bind=engine, checkfirst=True)
 
 
 # Helper to convert models.Event to dict for Pydantic
