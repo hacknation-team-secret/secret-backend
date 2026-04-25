@@ -27,10 +27,16 @@ def upgrade() -> None:
     op.create_table('cities',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('name', sa.String(), nullable=True),
-    sa.Column('boundary', geoalchemy2.types.Geometry(geometry_type='POLYGON', srid=4326, dimension=2, from_text='ST_GeomFromEWKT', name='geometry'), nullable=True),
+    sa.Column('boundary', geoalchemy2.types.Geometry(
+        geometry_type='POLYGON', srid=4326, dimension=2,
+        from_text='ST_GeomFromEWKT', name='geometry'
+    ), nullable=True),
     sa.PrimaryKeyConstraint('id')
     )
-    op.create_index('idx_cities_boundary', 'cities', ['boundary'], unique=False, postgresql_using='gist')
+    op.create_index(
+        'idx_cities_boundary', 'cities', ['boundary'],
+        unique=False, postgresql_using='gist'
+    )
     op.create_index(op.f('ix_cities_id'), 'cities', ['id'], unique=False)
     op.create_index(op.f('ix_cities_name'), 'cities', ['name'], unique=False)
     op.create_table('events',
@@ -39,12 +45,18 @@ def upgrade() -> None:
     sa.Column('description', sa.Text(), nullable=True),
     sa.Column('start_time', sa.DateTime(), nullable=True),
     sa.Column('end_time', sa.DateTime(), nullable=True),
-    sa.Column('location', geoalchemy2.types.Geometry(geometry_type='POINT', srid=4326, dimension=2, from_text='ST_GeomFromEWKT', name='geometry'), nullable=True),
+    sa.Column('location', geoalchemy2.types.Geometry(
+        geometry_type='POINT', srid=4326, dimension=2,
+        from_text='ST_GeomFromEWKT', name='geometry'
+    ), nullable=True),
     sa.Column('owner_type', sa.String(), nullable=True),
     sa.Column('owner_id', sa.Integer(), nullable=True),
     sa.PrimaryKeyConstraint('id')
     )
-    op.create_index('idx_events_location', 'events', ['location'], unique=False, postgresql_using='gist')
+    op.create_index(
+        'idx_events_location', 'events', ['location'],
+        unique=False, postgresql_using='gist'
+    )
     op.create_index(op.f('ix_events_id'), 'events', ['id'], unique=False)
     op.create_index(op.f('ix_events_title'), 'events', ['title'], unique=False)
     op.create_table('vendors',

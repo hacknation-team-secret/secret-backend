@@ -36,6 +36,7 @@ class User(UserBase):
     is_admin: bool
     api_key: str
     description: str | None = None
+    research_count: int
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -123,3 +124,10 @@ class Passport(BaseModel):
     attended_events: list[Event]
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class ResearchRequest(BaseModel):
+    query: str
+
+class ResearchResponse(BaseModel):
+    answer: str

@@ -54,6 +54,7 @@ class User(Base):
     api_key = Column(String, unique=True, index=True)
     is_admin = Column(Boolean, default=False)
     description = Column(Text, nullable=True)
+    research_count = Column(Integer, default=0)
 
     # Relationships
     administered_cities = relationship(
@@ -79,7 +80,9 @@ class City(Base):
     boundary = Column(Geometry("POLYGON", srid=4326))
 
     # Relationships
-    admins = relationship("User", secondary=city_admins, back_populates="administered_cities")
+    admins = relationship(
+        "User", secondary=city_admins, back_populates="administered_cities"
+    )
     authorized_vendors = relationship(
         "Vendor", secondary=vendor_cities, back_populates="authorized_cities"
     )
@@ -129,7 +132,9 @@ class Detour(Base):
 
     # Relationships
     owner = relationship("User", back_populates="detours")
-    events = relationship("DetourEvent", back_populates="detour", order_by="DetourEvent.order")
+    events = relationship(
+        "DetourEvent", back_populates="detour", order_by="DetourEvent.order"
+    )
     shared_with = relationship(
         "User", secondary="detour_shares", back_populates="shared_detours"
     )
@@ -147,7 +152,7 @@ class DetourEvent(Base):
     event = relationship("Event")
 
 
-# Association Tables (placed after classes to avoid forward reference issues if needed, though SQLAlchemy strings work too)
+# Association Tables (placed after classes to avoid forward reference issues)
 event_attendance = Table(
     "event_attendance",
     Base.metadata,

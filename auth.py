@@ -59,9 +59,13 @@ async def get_current_user(
         if username is None:
             raise credentials_exception
         token_data = schemas.TokenData(username=username)
-    except JWTError:
-        raise credentials_exception
-    user = db.query(models.User).filter(models.User.username == token_data.username).first()
+    except JWTError as e:
+        raise credentials_exception from e
+    user = (
+        db.query(models.User)
+        .filter(models.User.username == token_data.username)
+        .first()
+    )
     if user is None:
         raise credentials_exception
     return user
@@ -107,7 +111,11 @@ async def get_current_user_flexible(
             payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
             username: str = payload.get("sub")
             if username:
-                user = db.query(models.User).filter(models.User.username == username).first()
+                user = (
+                    db.query(models.User)
+                    .filter(models.User.username == username)
+                    .first()
+                )
                 if user:
                     return user
         except JWTError:
