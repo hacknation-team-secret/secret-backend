@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 import auth
 import models
 import schemas
-from agent import run_detour_agent, run_extract_research
+from agent import run_detour_agent, run_extract_research, run_plan_generation
 from database import engine, get_db
 from storage import tigris_client
 
@@ -629,10 +629,14 @@ async def upsert_group_budget(
     return budget
 
 
+<<<<<<< HEAD
 @app.post(
     "/groups/{group_id}/city-guide-plan",
     response_model=schemas.CityGuidePlanResponse,
 )
+=======
+@app.post("/groups/{group_id}/city-guide-plan", response_model=schemas.CityGuidePlanResponse)
+>>>>>>> 9e8040b (Add POST /groups/{group_id}/city-guide-plan endpoint)
 async def create_city_guide_plan(
     group_id: int,
     current_user: Annotated[models.User, Depends(auth.get_current_active_user)],
@@ -640,6 +644,7 @@ async def create_city_guide_plan(
 ):
     group = _get_group_for_member(db, group_id, current_user)
     group_context = _build_group_research_context(db, group)
+<<<<<<< HEAD
     query = (
         f"Create a detour for my group '{group.name}'. "
         f"Here is our group context:\n{group_context}"
@@ -669,6 +674,24 @@ async def create_city_guide_plan(
         }
     ]
     return {"steps": steps, "detour": detour_to_dict(detour)}
+=======
+
+    try:
+        steps = await run_plan_generation(group_context)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Plan generation failed: {e}") from e
+
+    db_detour = models.Detour(
+        name=f"{group.name} City Guide",
+        description=f"AI-generated group plan for {group.name}",
+        user_id=current_user.id,
+    )
+    db.add(db_detour)
+    db.commit()
+    db.refresh(db_detour)
+
+    return {"steps": steps, "detour": detour_to_dict(db_detour)}
+>>>>>>> 9e8040b (Add POST /groups/{group_id}/city-guide-plan endpoint)
 
 
 # --- Cities Management ---

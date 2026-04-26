@@ -238,6 +238,48 @@ def _run_tavily_extract(
         raise RuntimeError(f"Tavily Extract network error: {exc.reason}") from exc
 
 
+async def run_plan_generation(group_context: str) -> list[dict]:
+    """
+    Generates a structured city guide plan from group context using a direct LLM call.
+    Returns a list of step dicts with phase, title, and detail keys.
+    """
+    model = ChatOpenAI(
+        model=os.getenv("OPENROUTER_MODEL", "anthropic/claude-3.5-sonnet"),
+        base_url="https://openrouter.ai/api/v1",
+        api_key=os.getenv("OPENROUTER_API_KEY"),
+    )
+
+    prompt = (
+        f"{group_context}\n\n"
+        "Based on this group's profiles, budgets, and favorites, generate a Boston city guide plan. "
+        "Return ONLY a JSON array of 3 to 5 steps — no markdown, no explanation. Each step must have:\n"
+        '  "phase": a short time label (e.g. "morning", "afternoon", "evening")\n'
+        '  "title": a short activity title (under 8 words)\n'
+        '  "detail": one or two sentences describing the activity\n\n'
+        "Example:\n"
+        '[{"phase": "morning", "title": "Coffee walk through Beacon Hill", '
+        '"detail": "Start at a local cafe and stroll the gas-lit streets."}]'
+    )
+
+    response = await model.ainvoke(prompt)
+    raw = response.content if hasattr(response, "content") else str(response)
+
+    try:
+        match = re.search(r"\[.*\]", raw, re.DOTALL)
+        if match:
+            steps = json.loads(match.group())
+            if isinstance(steps, list):
+                return steps
+    except (json.JSONDecodeError, AttributeError):
+        pass
+
+    return [
+        {"phase": "morning", "title": "Group meetup", "detail": "Gather and align on the day's plan."},
+        {"phase": "afternoon", "title": "Explore top picks", "detail": "Visit the group's highest-voted favorites."},
+        {"phase": "evening", "title": "Group dinner", "detail": "Wrap up with a meal that fits everyone's budget."},
+    ]
+
+
 async def run_extract_research(
     url: str,
     query: str | None = None,
