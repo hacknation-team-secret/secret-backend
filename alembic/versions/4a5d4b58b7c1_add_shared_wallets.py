@@ -33,7 +33,12 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["created_by"], ["users.id"]),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index(op.f("ix_shared_wallets_id"), "shared_wallets", ["id"], unique=False)
+    op.create_index(
+        op.f("ix_shared_wallets_id"),
+        "shared_wallets",
+        ["id"],
+        unique=False,
+    )
     op.create_index(
         op.f("ix_shared_wallets_join_code"),
         "shared_wallets",

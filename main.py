@@ -1255,7 +1255,10 @@ async def list_shared_wallets(
 ):
     wallets = (
         db.query(models.SharedWallet)
-        .join(models.WalletMember, models.WalletMember.wallet_id == models.SharedWallet.id)
+        .join(
+            models.WalletMember,
+            models.WalletMember.wallet_id == models.SharedWallet.id,
+        )
         .filter(models.WalletMember.user_id == current_user.id)
         .all()
     )
@@ -1269,7 +1272,11 @@ async def create_shared_wallet(
     db: Annotated[Session, Depends(get_db)],
 ):
     join_code = generate_join_code()
-    while db.query(models.SharedWallet).filter(models.SharedWallet.join_code == join_code).first():
+    while (
+        db.query(models.SharedWallet)
+        .filter(models.SharedWallet.join_code == join_code)
+        .first()
+    ):
         join_code = generate_join_code()
 
     wallet = models.SharedWallet(
@@ -1332,7 +1339,7 @@ async def get_shared_wallet(
     current_user: Annotated[models.User, Depends(auth.get_current_active_user)],
     db: Annotated[Session, Depends(get_db)],
 ):
-    wallet, _member = get_wallet_for_member(db, wallet_id, current_user.id)
+    wallet, _member = get_wallet_for_member(db, wallet_id, cast(int, current_user.id))
     return wallet_to_dict(wallet)
 
 
@@ -1343,9 +1350,17 @@ async def update_shared_wallet(
     current_user: Annotated[models.User, Depends(auth.get_current_active_user)],
     db: Annotated[Session, Depends(get_db)],
 ):
-    wallet, member = get_wallet_for_member(db, wallet_id, current_user.id, lock=True)
+    wallet, member = get_wallet_for_member(
+        db,
+        wallet_id,
+        cast(int, current_user.id),
+        lock=True,
+    )
     if member.role != "admin":
-        raise HTTPException(status_code=403, detail="Only admins can update wallet settings")
+        raise HTTPException(
+            status_code=403,
+            detail="Only admins can update wallet settings",
+        )
 
     if wallet_in.alert_threshold_percent is not None:
         wallet.alert_threshold_percent = wallet_in.alert_threshold_percent
@@ -1356,13 +1371,16 @@ async def update_shared_wallet(
     return wallet_to_dict(wallet)
 
 
-@app.get("/wallets/{wallet_id}/transactions", response_model=list[schemas.WalletTransaction])
+@app.get(
+    "/wallets/{wallet_id}/transactions",
+    response_model=list[schemas.WalletTransaction],
+)
 async def list_wallet_transactions(
     wallet_id: int,
     current_user: Annotated[models.User, Depends(auth.get_current_active_user)],
     db: Annotated[Session, Depends(get_db)],
 ):
-    wallet, _member = get_wallet_for_member(db, wallet_id, current_user.id)
+    wallet, _member = get_wallet_for_member(db, wallet_id, cast(int, current_user.id))
     return wallet.transactions
 
 
@@ -1376,7 +1394,12 @@ async def fund_shared_wallet(
     if fund_in.amount_cents <= 0:
         raise HTTPException(status_code=400, detail="Funding amount must be positive")
 
-    wallet, member = get_wallet_for_member(db, wallet_id, current_user.id, lock=True)
+    wallet, member = get_wallet_for_member(
+        db,
+        wallet_id,
+        cast(int, current_user.id),
+        lock=True,
+    )
     wallet.total_balance_cents += fund_in.amount_cents
     member.contributed_cents += fund_in.amount_cents
     db.add(
@@ -1405,16 +1428,27 @@ async def spend_shared_wallet(
     if spend_in.amount_cents <= 0:
         raise HTTPException(status_code=400, detail="Spend amount must be positive")
 
-    wallet, member = get_wallet_for_member(db, wallet_id, current_user.id, lock=True)
+    wallet, member = get_wallet_for_member(
+        db,
+        wallet_id,
+        cast(int, current_user.id),
+        lock=True,
+    )
     if wallet.total_balance_cents < spend_in.amount_cents:
-        raise HTTPException(status_code=400, detail="Insufficient shared wallet balance")
+        raise HTTPException(
+            status_code=400,
+            detail="Insufficient shared wallet balance",
+        )
 
     projected_balance = wallet.total_balance_cents - spend_in.amount_cents
     if (
         wallet.spending_limit_cents is not None
         and spend_in.amount_cents > wallet.spending_limit_cents
     ):
-        raise HTTPException(status_code=400, detail="Spend exceeds wallet spending limit")
+        raise HTTPException(
+            status_code=400,
+            detail="Spend exceeds wallet spending limit",
+        )
 
     wallet.total_balance_cents = projected_balance
     member.spent_cents += spend_in.amount_cents
