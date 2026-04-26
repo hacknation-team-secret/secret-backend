@@ -7,189 +7,143 @@ from typing import Any
 from urllib import error, parse, request
 
 from dotenv import load_dotenv
-from langchain.agents import create_agent
+from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
-from langchain_tavily import TavilyCrawl, TavilyExtract, TavilyMap, TavilySearch
+from langchain_tavily import TavilySearch
+from langgraph.prebuilt import create_react_agent
+from sqlalchemy.orm import Session
 
-# Load environment variables from .env
+import models
+
 load_dotenv()
 
 TAVILY_EXTRACT_URL = "https://api.tavily.com/extract"
 
 
-def get_research_agent():
-    """
-    Initializes and returns a LangChain agent equipped with Tavily web tools.
-    """
+def make_detour_agent(
+    db: Session,
+    current_user: models.User,
+    created_detour_ids: list[int] | None = None,
+):
     tavily_search = TavilySearch(max_results=5, topic="general")
-    tavily_extract = TavilyExtract()
-    tavily_crawl = TavilyCrawl()
-    tavily_map = TavilyMap()
 
-    model = ChatOpenAI(model_name="gpt-4o")
-
-    today_date = datetime.today().strftime("%B %d, %Y")
-    system_prompt = (
-        f"You are a helpful research assistant. Today's date is {today_date}. "
-        "Use web search to find accurate, up-to-date information. "
-        "When the user asks about a specific website or page, prefer Tavily "
-        "extract, crawl, or map tools to inspect the source directly instead "
-        "of relying only on search."
-    )
-
-    agent = create_agent(
-        model=model,
-        tools=[tavily_search, tavily_extract, tavily_crawl, tavily_map],
-        system_prompt=system_prompt,
-    )
-
-    return agent
-
-
-async def run_research(query: str, history: list[dict] | None = None):
-    """
-    Runs a research query through the agent and returns the response.
-    """
-    agent = get_research_agent()
-
-    messages = history or []
-    messages.append({"role": "user", "content": query})
-
-    response = await agent.ainvoke({"messages": messages})
-
-    return response["messages"][-1].content
-
-
-def _text_score(text: str, signals: list[str]) -> int:
-    lower = text.lower()
-    return sum(1 for signal in signals if signal and signal.lower() in lower)
-
-
-def run_city_guide_plan(
-    context: dict[str, Any],
-    candidate_events: list[dict[str, Any]],
-) -> dict[str, Any]:
-    """
-    Deterministic City Guide planner loop.
-
-    The loop intentionally mirrors an agent tool flow without requiring extra user
-    chat: plan from passports/budget/location, execute by selecting events, then
-    verify the detour is concrete enough to create.
-    """
-    members = context.get("members", [])
-    favorites = context.get("favorites", [])
-    budgets = context.get("budgets", [])
-    group_name = context.get("group_name") or "Boston group"
-    starting_location = context.get("starting_location") or "Boston"
-
-    signal_text = " ".join(
-        str(value)
-        for member in members
-        for value in [
-            member.get("description"),
-            " ".join(member.get("attended_events", [])),
-            " ".join(member.get("detours", [])),
-        ]
-        if value
-    )
-    favorite_text = " ".join(
-        str(value)
-        for favorite in favorites
-        for value in [favorite.get("title"), favorite.get("description")]
-        if value
-    )
-    signals = [
-        "coffee",
-        "food",
-        "art",
-        "museum",
-        "music",
-        "park",
-        "history",
-        "book",
-        "scenic",
-        "quiet",
-        "social",
-        "architecture",
-        "shopping",
-    ]
-    combined_signal_text = f"{signal_text} {favorite_text}".lower()
-    matched_signals = [signal for signal in signals if signal in combined_signal_text]
-
-    planner_step = {
-        "phase": "planner",
-        "title": "Read passports and constraints",
-        "detail": (
-            f"City Guide reviewed {len(members)} member passport(s), "
-            f"{len(favorites)} favorite(s), and {len(budgets)} budget target(s)."
-        ),
-    }
-
-    ranked_events = sorted(
-        candidate_events,
-        key=lambda event: (
-            _text_score(
-                f"{event.get('title', '')} {event.get('description', '')}",
-                matched_signals,
-            ),
-            -abs(float(event.get("distance_hint", 0))),
-        ),
-        reverse=True,
-    )
-
-    selected = ranked_events[:3]
-    if len(selected) < 3:
-        selected = candidate_events[:3]
-
-    executor_step = {
-        "phase": "executor",
-        "title": "Select route stops",
-        "detail": " → ".join(event["title"] for event in selected)
-        if selected
-        else "No eligible Boston events were available.",
-    }
-
-    average_budget = 0.0
-    if budgets:
-        average_budget = (
-            sum(float(budget.get("total_budget", 0)) for budget in budgets)
-            / len(budgets)
+    @tool
+    def list_events() -> str:
+        """List all available events on the platform."""
+        events = db.query(models.Event).limit(20).all()
+        if not events:
+            return "No events available."
+        return "\n".join(
+            f"ID:{e.id} - {e.title}: {e.description or 'No description'}"
+            for e in events
         )
-    verifier_notes: list[str] = []
-    if len(selected) >= 3:
-        verifier_notes.append("3 concrete stops selected")
-    if average_budget:
-        verifier_notes.append(f"budget checked around ${average_budget:.0f}/person")
-    if matched_signals:
-        verifier_notes.append("passport overlap: " + ", ".join(matched_signals[:4]))
-    if not verifier_notes:
-        verifier_notes.append("fallback Boston route verified")
 
-    verifier_step = {
-        "phase": "verifier",
-        "title": "Verify detour quality",
-        "detail": "; ".join(verifier_notes),
-    }
+    @tool
+    def search_events(query: str) -> str:
+        """Search events on the platform by keyword.
 
-    title = f"{group_name} City Guide Detour"
-    if selected:
-        title = f"{selected[0]['title'].split()[0]} City Guide Detour"
+        Args:
+            query: Keyword to search event titles and descriptions.
+        """
+        events = db.query(models.Event).all()
+        q = query.lower()
+        matched = [
+            e
+            for e in events
+            if q in (e.title or "").lower() or q in (e.description or "").lower()
+        ]
+        if not matched:
+            return "No matching events found."
+        return "\n".join(
+            f"ID:{e.id} - {e.title}: {e.description or 'No description'}"
+            for e in matched[:10]
+        )
 
-    description_parts = [
-        f"Starts near {starting_location}.",
-        "Balances group passports, shared budget, and Boston geography.",
-    ]
-    if matched_signals:
-        description_parts.append(f"Optimized for {', '.join(matched_signals[:5])}.")
-    if average_budget:
-        description_parts.append(f"Budget target: about ${average_budget:.0f}/person.")
+    @tool
+    def get_my_passport() -> str:
+        """Get the current user's passport: their profile and attended events."""
+        attended = [e.title for e in current_user.attended_events]
+        return (
+            f"User: {current_user.username}\n"
+            f"Profile: {current_user.description or 'No profile set'}\n"
+            f"Attended: {', '.join(attended) if attended else 'None'}"
+        )
 
-    return {
-        "name": title,
-        "description": " ".join(description_parts),
-        "event_ids": [int(event["id"]) for event in selected],
-        "steps": [planner_step, executor_step, verifier_step],
-    }
+    @tool
+    def create_detour(name: str, description: str, event_ids: list[int]) -> str:
+        """Create and save a detour (itinerary) for the user.
+
+        Args:
+            name: Short name for the detour.
+            description: A sentence describing the detour.
+            event_ids: Ordered list of platform event IDs to include as stops.
+        """
+        db_detour = models.Detour(
+            name=name,
+            description=description,
+            user_id=current_user.id,
+        )
+        db.add(db_detour)
+        db.flush()
+
+        stops = []
+        for index, event_id in enumerate(event_ids):
+            event = db.query(models.Event).filter(models.Event.id == event_id).first()
+            if event:
+                db.add(
+                    models.DetourEvent(
+                        detour_id=db_detour.id, event_id=event.id, order=index
+                    )
+                )
+                stops.append(event.title)
+
+        db.commit()
+        db.refresh(db_detour)
+
+        if created_detour_ids is not None:
+            created_detour_ids.append(int(db_detour.id))
+
+        return (
+            f"Detour '{name}' created (ID:{db_detour.id}). "
+            f"Stops: {' → '.join(stops) if stops else 'none'}"
+        )
+
+    model = ChatOpenAI(
+        model=os.getenv("OPENROUTER_MODEL", "anthropic/claude-3.5-sonnet"),
+        base_url="https://openrouter.ai/api/v1",
+        api_key=os.getenv("OPENROUTER_API_KEY"),
+    )
+
+    today = datetime.today().strftime("%B %d, %Y")
+    system_prompt = (
+        f"You are a detour planning assistant. Today is {today}. "
+        "Help users discover and plan detours (itineraries) using events on "
+        "the platform and web research. "
+        "Use list_events or search_events to find platform events, "
+        "use tavily_search for web research and local inspiration, "
+        "then call create_detour to save the itinerary for the user. "
+        "Always call create_detour when the user asks to plan or create a detour."
+    )
+
+    return create_react_agent(
+        model,
+        [tavily_search, list_events, search_events, get_my_passport, create_detour],
+        prompt=system_prompt,
+    )
+
+
+async def run_detour_agent(
+    query: str,
+    db: Session,
+    current_user: models.User,
+    history: list[dict] | None = None,
+    created_detour_ids: list[int] | None = None,
+) -> str:
+    agent = make_detour_agent(db, current_user, created_detour_ids)
+    messages = list(history or [])
+    messages.append({"role": "user", "content": query})
+    response = await agent.ainvoke({"messages": messages})
+    return response["messages"][-1].content
 
 
 def _extract_instagram_username(url: str) -> str | None:
