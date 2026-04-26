@@ -219,6 +219,17 @@ class Detour(DetourBase):
     model_config = ConfigDict(from_attributes=True)
 
 
+class CityGuideStep(BaseModel):
+    phase: str
+    title: str
+    detail: str
+
+
+class CityGuidePlanResponse(BaseModel):
+    steps: list[CityGuideStep]
+    detour: Detour
+
+
 class Passport(BaseModel):
     username: str
     description: str | None = None

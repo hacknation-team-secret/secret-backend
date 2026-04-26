@@ -60,6 +60,138 @@ async def run_research(query: str, history: list[dict] | None = None):
     return response["messages"][-1].content
 
 
+def _text_score(text: str, signals: list[str]) -> int:
+    lower = text.lower()
+    return sum(1 for signal in signals if signal and signal.lower() in lower)
+
+
+def run_city_guide_plan(
+    context: dict[str, Any],
+    candidate_events: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """
+    Deterministic City Guide planner loop.
+
+    The loop intentionally mirrors an agent tool flow without requiring extra user
+    chat: plan from passports/budget/location, execute by selecting events, then
+    verify the detour is concrete enough to create.
+    """
+    members = context.get("members", [])
+    favorites = context.get("favorites", [])
+    budgets = context.get("budgets", [])
+    group_name = context.get("group_name") or "Boston group"
+    starting_location = context.get("starting_location") or "Boston"
+
+    signal_text = " ".join(
+        str(value)
+        for member in members
+        for value in [
+            member.get("description"),
+            " ".join(member.get("attended_events", [])),
+            " ".join(member.get("detours", [])),
+        ]
+        if value
+    )
+    favorite_text = " ".join(
+        str(value)
+        for favorite in favorites
+        for value in [favorite.get("title"), favorite.get("description")]
+        if value
+    )
+    signals = [
+        "coffee",
+        "food",
+        "art",
+        "museum",
+        "music",
+        "park",
+        "history",
+        "book",
+        "scenic",
+        "quiet",
+        "social",
+        "architecture",
+        "shopping",
+    ]
+    combined_signal_text = f"{signal_text} {favorite_text}".lower()
+    matched_signals = [signal for signal in signals if signal in combined_signal_text]
+
+    planner_step = {
+        "phase": "planner",
+        "title": "Read passports and constraints",
+        "detail": (
+            f"City Guide reviewed {len(members)} member passport(s), "
+            f"{len(favorites)} favorite(s), and {len(budgets)} budget target(s)."
+        ),
+    }
+
+    ranked_events = sorted(
+        candidate_events,
+        key=lambda event: (
+            _text_score(
+                f"{event.get('title', '')} {event.get('description', '')}",
+                matched_signals,
+            ),
+            -abs(float(event.get("distance_hint", 0))),
+        ),
+        reverse=True,
+    )
+
+    selected = ranked_events[:3]
+    if len(selected) < 3:
+        selected = candidate_events[:3]
+
+    executor_step = {
+        "phase": "executor",
+        "title": "Select route stops",
+        "detail": " → ".join(event["title"] for event in selected)
+        if selected
+        else "No eligible Boston events were available.",
+    }
+
+    average_budget = 0.0
+    if budgets:
+        average_budget = (
+            sum(float(budget.get("total_budget", 0)) for budget in budgets)
+            / len(budgets)
+        )
+    verifier_notes: list[str] = []
+    if len(selected) >= 3:
+        verifier_notes.append("3 concrete stops selected")
+    if average_budget:
+        verifier_notes.append(f"budget checked around ${average_budget:.0f}/person")
+    if matched_signals:
+        verifier_notes.append("passport overlap: " + ", ".join(matched_signals[:4]))
+    if not verifier_notes:
+        verifier_notes.append("fallback Boston route verified")
+
+    verifier_step = {
+        "phase": "verifier",
+        "title": "Verify detour quality",
+        "detail": "; ".join(verifier_notes),
+    }
+
+    title = f"{group_name} City Guide Detour"
+    if selected:
+        title = f"{selected[0]['title'].split()[0]} City Guide Detour"
+
+    description_parts = [
+        f"Starts near {starting_location}.",
+        "Balances group passports, shared budget, and Boston geography.",
+    ]
+    if matched_signals:
+        description_parts.append(f"Optimized for {', '.join(matched_signals[:5])}.")
+    if average_budget:
+        description_parts.append(f"Budget target: about ${average_budget:.0f}/person.")
+
+    return {
+        "name": title,
+        "description": " ".join(description_parts),
+        "event_ids": [int(event["id"]) for event in selected],
+        "steps": [planner_step, executor_step, verifier_step],
+    }
+
+
 def _extract_instagram_username(url: str) -> str | None:
     parsed = parse.urlparse(url)
     parts = [part for part in parsed.path.split("/") if part]

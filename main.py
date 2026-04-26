@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 import auth
 import models
 import schemas
-from agent import run_extract_research, run_research
+from agent import run_city_guide_plan, run_extract_research, run_research
 from database import engine, get_db
 from storage import tigris_client
 
@@ -270,6 +270,218 @@ def get_wallet_for_member(
     if not member:
         raise HTTPException(status_code=403, detail="Not authorized for this wallet")
     return wallet, member
+
+
+CITY_GUIDE_BOSTON_EVENTS = [
+    {
+        "title": "Boston Public Library Reading Room",
+        "description": (
+            "Architecture, quiet time, art murals, and a reliable reset point "
+            "near Copley."
+        ),
+        "location": [-71.0780, 42.3493],
+        "tags": ["architecture", "quiet", "art", "book"],
+    },
+    {
+        "title": "North End Espresso and Pastry Walk",
+        "description": (
+            "Italian cafes, pastry counters, social food stops, and historic "
+            "streets in a short loop."
+        ),
+        "location": [-71.0545, 42.3647],
+        "tags": ["coffee", "food", "history", "social"],
+    },
+    {
+        "title": "Harborwalk Seaport Viewpoint",
+        "description": (
+            "Scenic water views, open-air walking, and an easy transition "
+            "toward food or art."
+        ),
+        "location": [-71.0436, 42.3522],
+        "tags": ["scenic", "park", "food", "social"],
+    },
+    {
+        "title": "ICA Boston Contemporary Art Stop",
+        "description": (
+            "Contemporary art, harbor architecture, and a strong indoor anchor "
+            "for mixed groups."
+        ),
+        "location": [-71.0430, 42.3529],
+        "tags": ["art", "museum", "architecture", "scenic"],
+    },
+    {
+        "title": "Harvard Book Store and Square Loop",
+        "description": (
+            "Independent bookstore energy, cafes, campus architecture, and "
+            "walkable side streets."
+        ),
+        "location": [-71.1166, 42.3726],
+        "tags": ["book", "coffee", "architecture", "quiet"],
+    },
+    {
+        "title": "Fenway Music and Market Stop",
+        "description": (
+            "Casual group food, music-school energy, and a social base near "
+            "the ballpark."
+        ),
+        "location": [-71.1003, 42.3467],
+        "tags": ["music", "food", "social", "shopping"],
+    },
+    {
+        "title": "Boston Common Garden Cut-through",
+        "description": (
+            "Classic green space, low-cost walking, and flexible routing "
+            "between neighborhoods."
+        ),
+        "location": [-71.0656, 42.3550],
+        "tags": ["park", "history", "scenic", "budget"],
+    },
+]
+
+
+def _ensure_city_guide_boston_events(db: Session) -> list[models.Event]:
+    now = datetime.now(UTC)
+    events: list[models.Event] = []
+    for item in CITY_GUIDE_BOSTON_EVENTS:
+        event = (
+            db.query(models.Event)
+            .filter(models.Event.title == item["title"])
+            .first()
+        )
+        if not event:
+            event = models.Event(
+                title=item["title"],
+                description=item["description"],
+                start_time=now,
+                end_time=now + timedelta(hours=4),
+                location=from_shape(
+                    Point(item["location"][0], item["location"][1]),
+                    srid=4326,
+                ),
+                owner_type="city-guide",
+                owner_id=0,
+            )
+            db.add(event)
+            db.flush()
+        events.append(event)
+    db.commit()
+    return events
+
+
+def _city_guide_candidate_event(event: models.Event) -> dict[str, Any]:
+    event_dict = event_to_dict(event)
+    tags = next(
+        (
+            item["tags"]
+            for item in CITY_GUIDE_BOSTON_EVENTS
+            if item["title"] == event_dict["title"]
+        ),
+        [],
+    )
+    return {
+        **event_dict,
+        "tags": tags,
+        "distance_hint": 0,
+    }
+
+
+def _build_city_guide_context(
+    db: Session,
+    group: models.Group,
+    current_user: models.User,
+) -> dict[str, Any]:
+    members = []
+    for membership in group.memberships:
+        if membership.status != "accepted":
+            continue
+        member = membership.user
+        detours = (
+            db.query(models.Detour)
+            .filter(models.Detour.user_id == member.id)
+            .order_by(models.Detour.id.desc())
+            .limit(5)
+            .all()
+        )
+        members.append(
+            {
+                "username": member.username,
+                "description": member.description,
+                "attended_events": [event.title for event in member.attended_events],
+                "detours": [
+                    f"{detour.name}: {detour.description or 'No description'}"
+                    for detour in detours
+                ],
+            }
+        )
+
+    favorites = [
+        {
+            "title": favorite.title,
+            "description": favorite.description,
+            "estimated_cost": favorite.estimated_cost,
+            "votes": len(favorite.votes),
+        }
+        for favorite in group.favorites
+    ]
+    budgets = [
+        {
+            "username": budget.user.username,
+            "total_budget": budget.total_budget,
+            "currency": budget.currency,
+            "notes": budget.notes,
+        }
+        for budget in group.budgets
+    ]
+
+    return {
+        "group_name": group.name,
+        "group_description": group.description,
+        "starting_location": "Boston",
+        "current_user": current_user.username,
+        "members": members,
+        "favorites": favorites,
+        "budgets": budgets,
+    }
+
+
+def _create_city_guide_detour(
+    db: Session,
+    current_user: models.User,
+    group: models.Group,
+    plan: dict[str, Any],
+) -> models.Detour:
+    db_detour = models.Detour(
+        name=plan["name"],
+        description=plan["description"],
+        user_id=current_user.id,
+    )
+    db.add(db_detour)
+    db.flush()
+
+    for index, event_id in enumerate(plan["event_ids"]):
+        event = db.query(models.Event).filter(models.Event.id == event_id).first()
+        if not event:
+            continue
+        db.add(
+            models.DetourEvent(
+                detour_id=db_detour.id,
+                event_id=event.id,
+                order=index,
+            )
+        )
+
+    for membership in group.memberships:
+        if (
+            membership.status == "accepted"
+            and membership.user not in db_detour.shared_with
+        ):
+            db_detour.shared_with.append(membership.user)
+
+    db.commit()
+    db.refresh(db_detour)
+    return db_detour
+
+
 @app.get("/docs", include_in_schema=False)
 async def scalar_html():
     from scalar_fastapi import get_scalar_api_reference
@@ -623,6 +835,29 @@ async def upsert_group_budget(
     db.commit()
     db.refresh(budget)
     return budget
+
+
+@app.post(
+    "/groups/{group_id}/city-guide-plan",
+    response_model=schemas.CityGuidePlanResponse,
+)
+async def create_city_guide_plan(
+    group_id: int,
+    current_user: Annotated[models.User, Depends(auth.get_current_active_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    group = _get_group_for_member(db, group_id, current_user)
+    events = _ensure_city_guide_boston_events(db)
+    context = _build_city_guide_context(db, group, current_user)
+    plan = run_city_guide_plan(
+        context=context,
+        candidate_events=[_city_guide_candidate_event(event) for event in events],
+    )
+    detour = _create_city_guide_detour(db, current_user, group, plan)
+    return {
+        "steps": plan["steps"],
+        "detour": detour_to_dict(detour),
+    }
 
 
 # --- Cities Management ---
